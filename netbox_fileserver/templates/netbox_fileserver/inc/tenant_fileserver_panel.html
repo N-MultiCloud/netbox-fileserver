@@ -1,0 +1,14 @@
+{% load helpers %}
+<div class="card">
+  <h2 class="card-header">File Server</h2>
+  <table class="table table-hover attr-table">
+    <tr><th scope="row">Deployment</th><td>{{ deployment|linkify }}</td></tr>
+    <tr>
+      <th scope="row">Status</th>
+      <td><span class="badge text-bg-{{ deployment.get_status_color }}">{{ deployment.get_status_display }}</span></td>
+    </tr>
+    <tr><th scope="row">FQDN</th><td>{{ deployment.fqdn }}</td></tr>
+    <tr><th scope="row">Plan</th><td>{{ deployment.plan_gb }} GB / {{ deployment.plan_users }} users</td></tr>
+    <tr><th scope="row">Shares</th><td>{{ shares|length }}</td></tr>
+  </table>
+</div>

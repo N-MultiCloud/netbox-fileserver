@@ -1,0 +1,16 @@
+{% load helpers %}
+<div class="card">
+  <h2 class="card-header">File Server</h2>
+  <table class="table table-hover attr-table">
+    {% if domain %}
+    <tr><th scope="row">Role</th><td>Samba AD/DC</td></tr>
+    <tr><th scope="row">Domain</th><td>{{ domain|linkify }}</td></tr>
+    <tr><th scope="row">Deployment</th><td>{{ domain.deployment|linkify }}</td></tr>
+    {% endif %}
+    {% if nextcloud %}
+    <tr><th scope="row">Role</th><td>Nextcloud (Web Drive)</td></tr>
+    <tr><th scope="row">Instance</th><td>{{ nextcloud|linkify }}</td></tr>
+    <tr><th scope="row">Deployment</th><td>{{ nextcloud.deployment|linkify }}</td></tr>
+    {% endif %}
+  </table>
+</div>

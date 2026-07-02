@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netbox-fileserver"
+version = "0.0.1"
+requires-python = ">=3.12.0"
+dependencies = [
+    # NMSBackend connection registry + the file-server product's reconciler
+    # backend live in netbox-nms. Not published to public PyPI — resolved from
+    # the local editable path in dev (see [tool.uv.sources]); CI runs static
+    # tests only and never resolves this dependency.
+    "netbox-nms>=0.1.6,<0.2.0",
+]
+authors = [
+    {name = "Emerson Felipe", email = "emerson.felipe@nmultifibra.com.br"},
+]
+description = "NetBox plugin modeling managed Samba AD/DC + Nextcloud file-server deployments as desired state"
+readme = { file = "README.md", content-type = "text/markdown" }
+license = "MIT"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Django",
+    "Framework :: Django :: 6.0",
+    "Intended Audience :: System Administrators",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[project.optional-dependencies]
+test = ["ruff", "pytest>=8.0", "pytest-cov>=6.0"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["netbox_fileserver*"]
+
+[tool.setuptools.package-data]
+netbox_fileserver = [
+    "templates/**",
+    "static/**",
+]
+
+[tool.uv.sources]
+netbox-nms = { path = "../netbox-nms", editable = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP", "SIM"]
+ignore = ["E501", "E722"]
+
+[tool.ruff.lint.per-file-ignores]
+"*/migrations/*" = ["E501", "I001"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["netbox_fileserver"]
+omit = ["netbox_fileserver/migrations/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false

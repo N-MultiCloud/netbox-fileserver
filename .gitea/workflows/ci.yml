@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+# Only push to protected branches (no pull_request trigger) — the prod-deploy
+# runner carries deploy credentials; untrusted PR code must not run on it.
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    name: Lint and test
+    runs-on: prod-deploy
+    env:
+      HOME: ${{ github.workspace }}
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        shell: bash
+        run: |
+          set -eo pipefail
+          export HOME="${GITHUB_WORKSPACE:-$PWD}"
+          export PATH="$HOME/.local/bin:$PATH"
+          if ! command -v uv >/dev/null 2>&1; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+          fi
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Ruff lint
+        shell: bash
+        run: |
+          set -eo pipefail
+          export HOME="${GITHUB_WORKSPACE:-$PWD}"
+          export PATH="$HOME/.local/bin:$PATH"
+          uvx ruff check netbox_fileserver/ tests/
+
+      - name: Compile check
+        shell: bash
+        run: |
+          set -eo pipefail
+          export HOME="${GITHUB_WORKSPACE:-$PWD}"
+          export PATH="$HOME/.local/bin:$PATH"
+          # --no-project: netbox-nms is not on public PyPI; the static tests
+          # never import the plugin, so no project deps are needed.
+          uv run --no-project --python 3.12 python -m compileall netbox_fileserver/
+
+      - name: Run tests
+        shell: bash
+        run: |
+          set -eo pipefail
+          export HOME="${GITHUB_WORKSPACE:-$PWD}"
+          export PATH="$HOME/.local/bin:$PATH"
+          uv run --no-project --python 3.12 --with pytest pytest tests/ -v

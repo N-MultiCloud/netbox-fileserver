@@ -1,0 +1,333 @@
+"""Import-free static-contract tests.
+
+These assert the plugin's structural invariants by reading source text, so they
+run in CI without a NetBox/Django environment or a database.
+"""
+
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+PKG = ROOT / "netbox_fileserver"
+
+MODEL_FILES = (
+    "__init__.py",
+    "choices.py",
+    "models.py",
+    "filtersets.py",
+    "forms.py",
+    "tables.py",
+    "views.py",
+    "urls.py",
+    "navigation.py",
+    "search.py",
+    "template_content.py",
+    "api/serializers.py",
+    "api/views.py",
+    "api/urls.py",
+    "graphql/types.py",
+    "graphql/schema.py",
+)
+
+# NOTE: The strings below are the dangerous *patterns this test scans source
+# for* — they are string literals used for detection, never executed. The test
+# asserts none of them appear in the plugin's own Python sources.
+FORBIDDEN_PATTERNS = (
+    "eval(",
+    "exec(",
+    "os.system(",
+    "pickle.loads(",
+    "innerHTML",
+    "dangerouslySetInnerHTML",
+    "subprocess.",
+)
+
+
+def read(rel: str) -> str:
+    return (PKG / rel).read_text(encoding="utf-8")
+
+
+# ─────────────────────────── Plugin config ───────────────────────────
+
+
+def test_plugin_config_name_and_base_url():
+    src = read("__init__.py")
+    assert 'name = "netbox_fileserver"' in src
+    assert 'base_url = "fileserver"' in src
+
+
+def test_plugin_requires_netbox_nms():
+    src = read("__init__.py")
+    assert 'required_plugins = ["netbox_nms"]' in src
+
+
+def test_plugin_version_bounds():
+    src = read("__init__.py")
+    assert 'min_version = "4.5.0"' in src
+    assert 'max_version = "4.6.99"' in src
+
+
+# ─────────────────────────────── Models ───────────────────────────────
+
+
+def test_all_five_models_present():
+    src = read("models.py")
+    for cls in (
+        "class FileServerDeployment(NetBoxModel):",
+        "class SambaDomain(NetBoxModel):",
+        "class NextcloudInstance(NetBoxModel):",
+        "class FileShare(NetBoxModel):",
+        "class DomainGroup(NetBoxModel):",
+    ):
+        assert cls in src, cls
+
+
+def test_deployment_secret_is_reference_only_not_ciphertext():
+    """NetBox holds only a pointer to the secret, never the secret itself."""
+    src = read("models.py")
+    assert "secret_ref = models.CharField(" in src
+    # The plugin must not import or use encryption helpers — no secrets at rest.
+    assert "Fernet" not in src
+    assert "encrypt_secret" not in src
+    assert "decrypt_secret" not in src
+    assert "_encrypted" not in src
+
+
+def test_deployment_backend_fk_to_nmsbackend():
+    src = read("models.py")
+    assert 'to="netbox_nms.NMSBackend"' in src
+    assert "on_delete=models.SET_NULL" in src
+
+
+def test_deployment_tenant_is_protected_one_to_one():
+    src = read("models.py")
+    assert 'to="tenancy.Tenant"' in src
+    assert "on_delete=models.PROTECT" in src
+    assert 'related_name="fileserver_deployment"' in src
+
+
+def test_fileshare_is_the_integration_object():
+    src = read("models.py")
+    assert "class FileShare(NetBoxModel):" in src
+    assert "smb_enabled = models.BooleanField" in src
+    assert "acl_spec = models.JSONField" in src
+    assert "nc_mount_enabled = models.BooleanField" in src
+    assert "notify_active = models.BooleanField" in src
+    assert 'unique_together = (("deployment", "name"),)' in src
+
+
+def test_fileshare_models_samba_vfs_features():
+    """A share carries the real per-share Samba VFS product features
+    (Previous Versions / recycle bin), not just path + ACL."""
+    src = read("models.py")
+    assert "snapshots_enabled = models.BooleanField" in src
+    assert "recycle_enabled = models.BooleanField" in src
+    assert "vfs_shadow_copy2" in src
+    assert "vfs_recycle" in src
+
+
+def test_fileshare_clean_validates_acl_spec_against_groups():
+    src = read("models.py")
+    assert "def clean(self) -> None:" in src
+    assert "_known_domain_group_names" in src
+    assert "references unknown AD group" in src
+
+
+def test_domain_group_scoped_to_domain():
+    src = read("models.py")
+    assert "class DomainGroup(NetBoxModel):" in src
+    assert 'to="netbox_fileserver.SambaDomain"' in src
+    assert 'unique_together = (("domain", "name"),)' in src
+
+
+def test_observed_fields_present():
+    """Reconciler-written observed fields exist for drift visibility."""
+    src = read("models.py")
+    for field in ("ldaps_cert_expiry", "nc_mount_id", "notify_active", "version"):
+        assert field in src, field
+
+
+# ─────────────────────────────── Choices ──────────────────────────────
+
+
+def test_deployment_status_lifecycle():
+    src = read("choices.py")
+    for value in ("planned", "provisioning", "active", "failed", "decommissioning"):
+        assert f'"{value}"' in src, value
+
+
+def test_acl_role_choices():
+    src = read("choices.py")
+    assert "class ACLRoleChoices(ChoiceSet):" in src
+    for value in ("ro", "rw", "full", "deny"):
+        assert f'"{value}"' in src, value
+
+
+# ────────────────────────────── REST API ──────────────────────────────
+
+
+def test_api_router_registers_all_collections():
+    src = read("api/urls.py")
+    assert "router = NetBoxRouter()" in src
+    for path in (
+        "deployments",
+        "samba-domains",
+        "nextcloud-instances",
+        "shares",
+        "domain-groups",
+    ):
+        assert f'router.register("{path}"' in src, path
+
+
+def test_api_serializers_never_expose_a_secret_field():
+    src = read("api/serializers.py")
+    # Only secret_ref (a pointer) may appear; no ciphertext/token fields.
+    assert "_encrypted" not in src
+    assert '"token"' not in src
+
+
+# ────────────────────────────── Migration ─────────────────────────────
+
+
+def test_migration_declares_all_models_and_deps():
+    # Quote-agnostic: the migration is makemigrations-generated (single quotes).
+    src = (PKG / "migrations" / "0001_initial.py").read_text(encoding="utf-8")
+    assert "initial = True" in src
+    assert src.count("migrations.CreateModel") == 5
+    for name in (
+        "FileServerDeployment",
+        "SambaDomain",
+        "NextcloudInstance",
+        "FileShare",
+        "DomainGroup",
+    ):
+        assert name in src, name
+    # netbox_nms provides NMSBackend (FK target); assert the dependency apps.
+    assert "netbox_nms" in src
+    for app in ("extras", "tenancy", "ipam", "virtualization"):
+        assert app in src, app
+
+
+# ────────────────────────── Wiring / registration ─────────────────────
+
+
+def test_navigation_registers_menu():
+    src = read("navigation.py")
+    assert "menu = PluginMenu(" in src
+    assert 'label="File Server"' in src
+
+
+def test_template_content_exposes_extensions():
+    src = read("template_content.py")
+    assert "template_extensions = (" in src
+    # NetBox 4.x uses the plural `models` list, not singular `model` (the latter
+    # silently registers the panel globally on every object detail page).
+    assert 'models = ["tenancy.tenant"]' in src
+    assert 'models = ["virtualization.virtualmachine"]' in src
+
+
+def test_search_registers_indexes():
+    src = read("search.py")
+    assert src.count("@register_search") == 5
+
+
+# ──────────────────────────────── Security ────────────────────────────
+
+
+def test_no_forbidden_patterns_in_python_sources():
+    for rel in MODEL_FILES:
+        src = read(rel)
+        for pattern in FORBIDDEN_PATTERNS:
+            assert pattern not in src, f"{pattern} found in {rel}"
+
+
+# ─────────────────── Full CRUD surface + reconciler contract ───────────────────
+
+# (ClassName, url/template model name, url slug)
+MODELS = (
+    ("FileServerDeployment", "fileserverdeployment", "deployments"),
+    ("SambaDomain", "sambadomain", "samba-domains"),
+    ("NextcloudInstance", "nextcloudinstance", "nextcloud-instances"),
+    ("FileShare", "fileshare", "shares"),
+    ("DomainGroup", "domaingroup", "domain-groups"),
+)
+
+# Reconciler-written (observed) fields — the external reconciler PATCHes these,
+# so they must be WRITABLE in the API and ABSENT from the operator forms.
+OBSERVED_FIELDS = (
+    "version",
+    "nc_mount_id",
+    "notify_active",
+    "ldaps_cert_expiry",
+    "ldap_config_id",
+)
+
+
+def test_serializers_keep_observed_fields_writable():
+    """The reconciler must be able to PATCH observed fields, so no serializer may
+    mark them read-only — every serializer's read_only_fields is exactly
+    (created, last_updated)."""
+    src = read("api/serializers.py")
+    assert src.count('read_only_fields = ("created", "last_updated")') == 5
+    # Belt-and-suspenders: no observed field name appears on a read_only line.
+    for line in src.splitlines():
+        if "read_only_fields" in line:
+            for field in OBSERVED_FIELDS:
+                assert field not in line, f"{field} must stay writable"
+
+
+def test_forms_exclude_reconciler_written_fields():
+    """Observed fields are reconciler-owned and must never appear as editable
+    form fields (also guards against the ModelForm non-editable FieldError)."""
+    src = read("forms.py")
+    for field in OBSERVED_FIELDS:
+        assert f'"{field}"' not in src, f"{field} must not be a form field"
+
+
+def test_forms_do_not_hardcode_a_none_queryset_fallback():
+    """netbox-nms is a required plugin — NMSBackend is imported directly, with no
+    wrong-typed .objects.none() fallback."""
+    src = read("forms.py")
+    assert "from netbox_nms.models import NMSBackend" in src
+    assert "FileServerDeployment.objects.none()" not in src
+
+
+def test_bulk_edit_is_wired_for_all_models():
+    forms_src = read("forms.py")
+    views_src = read("views.py")
+    urls_src = read("urls.py")
+    assert forms_src.count("(NetBoxModelBulkEditForm):") == 5
+    assert views_src.count("(generic.BulkEditView):") == 5
+    assert 'name=f"{name}_bulk_edit"' in urls_src
+
+
+def test_every_model_has_the_full_plugin_surface():
+    serializers = read("api/serializers.py")
+    api_views = read("api/views.py")
+    filtersets = read("filtersets.py")
+    forms_src = read("forms.py")
+    tables = read("tables.py")
+    views_src = read("views.py")
+    for cls, _name, _slug in MODELS:
+        assert f"class {cls}Serializer(" in serializers, cls
+        assert f"class {cls}ViewSet(" in api_views, cls
+        assert f"class {cls}FilterSet(" in filtersets, cls
+        assert f"class {cls}Form(" in forms_src, cls
+        assert f"class {cls}BulkEditForm(" in forms_src, cls
+        assert f"class {cls}Table(" in tables, cls
+        for suffix in ("ListView", "EditView", "DeleteView", "BulkEditView", "BulkDeleteView"):
+            assert f"class {cls}{suffix}(" in views_src, f"{cls}{suffix}"
+
+
+def test_detail_template_exists_for_every_model():
+    for _cls, name, _slug in MODELS:
+        tmpl = PKG / "templates" / "netbox_fileserver" / f"{name}.html"
+        assert tmpl.is_file(), f"missing detail template {name}.html"
+
+
+def test_navigation_and_urls_cover_every_model():
+    nav = read("navigation.py")
+    urls = read("urls.py")
+    for _cls, name, slug in MODELS:
+        assert name in nav, f"{name} missing from navigation"
+        assert name in urls, f"{name} missing from urls"
+        assert f'"{slug}"' in urls, f"{slug} slug missing from urls"

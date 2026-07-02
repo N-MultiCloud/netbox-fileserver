@@ -1,0 +1,34 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+{% load render_table from django_tables2 %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Samba Domain</h2>
+      <table class="table table-hover attr-table">
+        <tr><th scope="row">Realm</th><td>{{ object.realm }}</td></tr>
+        <tr><th scope="row">NetBIOS name</th><td>{{ object.netbios_name }}</td></tr>
+        <tr><th scope="row">Deployment</th><td>{{ object.deployment|linkify }}</td></tr>
+        <tr>
+          <th scope="row">Status</th>
+          <td><span class="badge text-bg-{{ object.get_status_color }}">{{ object.get_status_display }}</span></td>
+        </tr>
+        <tr><th scope="row">Functional level</th><td>{{ object.get_functional_level_display }}</td></tr>
+        <tr><th scope="row">DC VM</th><td>{{ object.dc_vm|linkify|placeholder }}</td></tr>
+        <tr><th scope="row">DC IP</th><td>{{ object.dc_ip|linkify|placeholder }}</td></tr>
+        <tr><th scope="row">LDAPS cert expiry</th><td>{{ object.ldaps_cert_expiry|placeholder }}</td></tr>
+      </table>
+    </div>
+    {% include 'inc/panels/custom_fields.html' %}
+    {% include 'inc/panels/tags.html' %}
+  </div>
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Domain Groups</h2>
+      <div class="table-responsive">{% render_table groups_table %}</div>
+    </div>
+  </div>
+</div>
+{% endblock content %}

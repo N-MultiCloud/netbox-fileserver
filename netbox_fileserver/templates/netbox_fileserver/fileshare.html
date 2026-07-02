@@ -1,0 +1,59 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">File Share</h2>
+      <table class="table table-hover attr-table">
+        <tr><th scope="row">Name</th><td>{{ object.name }}</td></tr>
+        <tr><th scope="row">Deployment</th><td>{{ object.deployment|linkify }}</td></tr>
+        <tr><th scope="row">Path</th><td>{{ object.path }}</td></tr>
+        <tr>
+          <th scope="row">Status</th>
+          <td><span class="badge text-bg-{{ object.get_status_color }}">{{ object.get_status_display }}</span></td>
+        </tr>
+        <tr><th scope="row">Description</th><td>{{ object.description|placeholder }}</td></tr>
+      </table>
+    </div>
+    {% include 'inc/panels/custom_fields.html' %}
+    {% include 'inc/panels/tags.html' %}
+  </div>
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Samba (SMB)</h2>
+      <table class="table table-hover attr-table">
+        <tr>
+          <th scope="row">SMB enabled</th>
+          <td>{% if object.smb_enabled %}<span class="badge text-bg-success">Yes</span>{% else %}<span class="badge text-bg-secondary">No</span>{% endif %}</td>
+        </tr>
+        <tr>
+          <th scope="row">Snapshots (Previous Versions)</th>
+          <td>{% if object.snapshots_enabled %}<span class="badge text-bg-success">Yes</span>{% else %}<span class="badge text-bg-secondary">No</span>{% endif %}</td>
+        </tr>
+        <tr>
+          <th scope="row">Recycle bin</th>
+          <td>{% if object.recycle_enabled %}<span class="badge text-bg-success">Yes</span>{% else %}<span class="badge text-bg-secondary">No</span>{% endif %}</td>
+        </tr>
+        <tr><th scope="row">ACL spec</th><td><pre class="mb-0">{{ object.acl_spec|json }}</pre></td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h2 class="card-header">Nextcloud (external storage)</h2>
+      <table class="table table-hover attr-table">
+        <tr>
+          <th scope="row">Mount enabled</th>
+          <td>{% if object.nc_mount_enabled %}<span class="badge text-bg-success">Yes</span>{% else %}<span class="badge text-bg-secondary">No</span>{% endif %}</td>
+        </tr>
+        <tr><th scope="row">Mount point</th><td>{{ object.nc_mount_point|placeholder }}</td></tr>
+        <tr><th scope="row">Mount id</th><td>{{ object.nc_mount_id|placeholder }}</td></tr>
+        <tr>
+          <th scope="row">Notify active</th>
+          <td>{% if object.notify_active %}<span class="badge text-bg-success">Yes</span>{% else %}<span class="badge text-bg-warning text-dark">No</span>{% endif %}</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock content %}

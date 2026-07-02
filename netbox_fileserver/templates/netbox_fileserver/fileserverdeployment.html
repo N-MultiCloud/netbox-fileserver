@@ -1,0 +1,65 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+{% load render_table from django_tables2 %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">File Server Deployment</h2>
+      <table class="table table-hover attr-table">
+        <tr><th scope="row">FQDN</th><td>{{ object.fqdn }}</td></tr>
+        <tr><th scope="row">Tenant</th><td>{{ object.tenant|linkify|placeholder }}</td></tr>
+        <tr>
+          <th scope="row">Status</th>
+          <td><span class="badge text-bg-{{ object.get_status_color }}">{{ object.get_status_display }}</span></td>
+        </tr>
+        <tr><th scope="row">Reconciler backend</th><td>{{ object.backend|linkify|placeholder }}</td></tr>
+        <tr><th scope="row">VLAN</th><td>{{ object.vlan|linkify|placeholder }}</td></tr>
+        <tr><th scope="row">Prefix</th><td>{{ object.prefix|linkify|placeholder }}</td></tr>
+        <tr><th scope="row">Plan storage (GB)</th><td>{{ object.plan_gb }}</td></tr>
+        <tr><th scope="row">Plan users</th><td>{{ object.plan_users }}</td></tr>
+        <tr><th scope="row">Secret reference</th><td>{{ object.secret_ref|placeholder }}</td></tr>
+        <tr><th scope="row">Description</th><td>{{ object.description|placeholder }}</td></tr>
+      </table>
+    </div>
+    {% include 'inc/panels/custom_fields.html' %}
+    {% include 'inc/panels/tags.html' %}
+  </div>
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Samba Domain</h2>
+      <table class="table table-hover attr-table">
+        {% if samba_domain %}
+        <tr><th scope="row">Realm</th><td>{{ samba_domain|linkify }}</td></tr>
+        <tr><th scope="row">NetBIOS</th><td>{{ samba_domain.netbios_name }}</td></tr>
+        <tr><th scope="row">DC VM</th><td>{{ samba_domain.dc_vm|linkify|placeholder }}</td></tr>
+        {% else %}
+        <tr><td colspan="2" class="text-muted">No Samba domain modeled yet.</td></tr>
+        {% endif %}
+      </table>
+    </div>
+    <div class="card">
+      <h2 class="card-header">Nextcloud Instance</h2>
+      <table class="table table-hover attr-table">
+        {% if nextcloud_instance %}
+        <tr><th scope="row">Instance</th><td>{{ nextcloud_instance|linkify }}</td></tr>
+        <tr><th scope="row">VM</th><td>{{ nextcloud_instance.vm|linkify|placeholder }}</td></tr>
+        <tr><th scope="row">Version</th><td>{{ nextcloud_instance.version|placeholder }}</td></tr>
+        {% else %}
+        <tr><td colspan="2" class="text-muted">No Nextcloud instance modeled yet.</td></tr>
+        {% endif %}
+      </table>
+    </div>
+    {% include 'inc/panels/comments.html' %}
+  </div>
+</div>
+<div class="row">
+  <div class="col col-md-12">
+    <div class="card">
+      <h2 class="card-header">Shares</h2>
+      <div class="table-responsive">{% render_table shares_table %}</div>
+    </div>
+  </div>
+</div>
+{% endblock content %}
