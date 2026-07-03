@@ -42,7 +42,20 @@ class FileServerDeploymentSerializer(NetBoxModelSerializer):
             "created",
             "last_updated",
         )
+        read_only_fields = ("status", "created", "last_updated")
+
+
+class FileServerDeploymentReconcilerSerializer(FileServerDeploymentSerializer):
+    class Meta(FileServerDeploymentSerializer.Meta):
         read_only_fields = ("created", "last_updated")
+
+    def update(self, instance, validated_data):
+        allow_status_write = (
+            "status" in validated_data and validated_data["status"] != instance.status
+        )
+        if allow_status_write:
+            instance.allow_reconciler_status_write()
+        return super().update(instance, validated_data)
 
 
 class FileServerDeploymentApproveSerializer(serializers.Serializer):
@@ -69,7 +82,6 @@ class FileServerEnrollmentTokenSerializer(NetBoxModelSerializer):
             "id",
             "url",
             "display",
-            "token_hash",
             "token",
             "tenant",
             "target_deployment",
@@ -81,7 +93,6 @@ class FileServerEnrollmentTokenSerializer(NetBoxModelSerializer):
             "last_updated",
         )
         read_only_fields = (
-            "token_hash",
             "token",
             "used_at",
             "created",

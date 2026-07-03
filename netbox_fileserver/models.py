@@ -41,6 +41,12 @@ _NETBIOS_VALIDATOR = RegexValidator(
 _SHARE_NAME_INVALID = set('/\\:*?"<>|')
 DEFAULT_ENROLLMENT_TOKEN_TTL = timedelta(hours=24)
 ENROLLMENT_TOKEN_BYTES = 32
+_DEPLOYMENT_APPROVAL_STATUSES = {
+    DeploymentStatusChoices.STATUS_PLANNED,
+    DeploymentStatusChoices.STATUS_ACTIVE,
+}
+_ALLOW_APPROVAL_STATUS_WRITE_ATTR = "_fileserver_allow_approval_status_write"
+_ALLOW_RECONCILER_STATUS_WRITE_ATTR = "_fileserver_allow_reconciler_status_write"
 
 
 def _token_hash(plaintext: str) -> str:
@@ -135,16 +141,22 @@ class FileServerDeployment(NetBoxModel):
             raise ValidationError(
                 {"status": "Only pending-approval deployments can be approved."}
             )
-        if status not in {
-            DeploymentStatusChoices.STATUS_PLANNED,
-            DeploymentStatusChoices.STATUS_ACTIVE,
-        }:
+        if status not in _DEPLOYMENT_APPROVAL_STATUSES:
             raise ValidationError(
                 {"status": "Approved deployments must transition to planned or active."}
             )
         self.status = status
-        self.full_clean()
-        self.save(update_fields=("status", "last_updated"))
+        setattr(self, _ALLOW_APPROVAL_STATUS_WRITE_ATTR, True)
+        try:
+            self.full_clean()
+            self.save(update_fields=("status", "last_updated"))
+        finally:
+            if hasattr(self, _ALLOW_APPROVAL_STATUS_WRITE_ATTR):
+                delattr(self, _ALLOW_APPROVAL_STATUS_WRITE_ATTR)
+
+    def allow_reconciler_status_write(self) -> None:
+        """Permit one API save from the reconciler service account."""
+        setattr(self, _ALLOW_RECONCILER_STATUS_WRITE_ATTR, True)
 
     def clean(self) -> None:
         super().clean()
@@ -152,6 +164,41 @@ class FileServerDeployment(NetBoxModel):
             self.fqdn = self.fqdn.strip().lower()
             if not _FQDN_RE.match(self.fqdn):
                 raise ValidationError({"fqdn": "Enter a valid lowercase FQDN, e.g. tenant.drive.example.net."})
+        self._validate_status_transition()
+
+    def save(self, *args, **kwargs):
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or "status" in update_fields:
+            self._validate_status_transition()
+        return super().save(*args, **kwargs)
+
+    def _validate_status_transition(self) -> None:
+        if not self.pk:
+            return
+        previous_status = (
+            type(self).objects.filter(pk=self.pk).values_list("status", flat=True).first()
+        )
+        if previous_status is None or previous_status == self.status:
+            return
+        if getattr(self, _ALLOW_RECONCILER_STATUS_WRITE_ATTR, False):
+            return
+        if getattr(self, _ALLOW_APPROVAL_STATUS_WRITE_ATTR, False):
+            if (
+                previous_status == DeploymentStatusChoices.STATUS_PENDING_APPROVAL
+                and self.status in _DEPLOYMENT_APPROVAL_STATUSES
+            ):
+                return
+            raise ValidationError(
+                {"status": "Only pending-approval deployments can be approved."}
+            )
+        raise ValidationError(
+            {
+                "status": (
+                    "Deployment status may only be changed through the approve "
+                    "action or by the reconciler service account."
+                )
+            }
+        )
 
 
 class FileServerEnrollmentToken(NetBoxModel):

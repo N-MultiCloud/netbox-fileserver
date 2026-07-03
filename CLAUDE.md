@@ -69,10 +69,12 @@ define this integration surface are vendored at
    stores only a SHA-256 `token_hash`; plaintext is returned only once when
    minted and is never persisted. Do **not** add encrypted secret fields or
    import `netbox_nms.encryption` here.
-2. **Observed fields are reconciler-written**: `status`, `NextcloudInstance.version`,
-   `FileShare.nc_mount_id` / `notify_active`, `SambaDomain.ldaps_cert_expiry`,
-   `NextcloudInstance.ldap_config_id`. They are API-writable (not read-only) and
-   omitted from the create/edit forms.
+2. **Observed fields are reconciler-written**:
+   `NextcloudInstance.version`, `FileShare.nc_mount_id` / `notify_active`,
+   `SambaDomain.ldaps_cert_expiry`, and `NextcloudInstance.ldap_config_id`.
+   They are API-writable (not read-only) and omitted from the create/edit forms.
+   `FileServerDeployment.status` is writable only through the `approve` action
+   or the `File Server Reconcilers` service-account API path.
 3. **End users are NOT modeled** — only `DomainGroup` (ACLs reference groups).
    Passwords / per-user churn stay in AD.
 4. **No** `eval`, `exec`, `os.system`, `pickle.loads`, `innerHTML`,
@@ -89,8 +91,9 @@ define this integration surface are vendored at
 - Enrollment: `POST /api/plugins/fileserver/enrollment-tokens/consume/` accepts
   `token`, `vmid`, `hostname`, `ips`, `realm`, and `netbios`, validates the
   one-time tenant token, stamps `used_at`, and returns tenant plus optional
-  deployment context. The reconciler performs all object writes after that
-  validation.
+  deployment context. This endpoint requires a global reconciler service
+  identity, not a tenant-scoped grant. The reconciler performs all object writes
+  after that validation.
 - Pending approval: `POST /api/plugins/fileserver/deployments/{id}/approve/`
   transitions `pending_approval` deployments to `planned` or `active`. It is
   gated to staff/superusers or the tenant's

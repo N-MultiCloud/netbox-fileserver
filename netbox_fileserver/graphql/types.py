@@ -15,7 +15,18 @@ class FileServerDeploymentType:
     pass
 
 
-@strawberry_django.type(FileServerEnrollmentToken, fields="__all__")
+@strawberry_django.type(
+    FileServerEnrollmentToken,
+    fields=(
+        "id",
+        "tenant",
+        "target_deployment",
+        "expires_at",
+        "used_at",
+        "created",
+        "last_updated",
+    ),
+)
 class FileServerEnrollmentTokenType:
     pass
 

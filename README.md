@@ -32,7 +32,8 @@ reconciliation trigger.
    access is through the REST/GraphQL API.
 2. **No secrets at rest in NetBox.** `secret_ref` is a pointer (e.g. a Vault
    path). Enrollment tokens store only a SHA-256 `token_hash`; plaintext tokens
-   are returned once on mint and are never persisted. Ciphertext/secrets live in
+   are returned once on mint and are never persisted, and the stored hash is not
+   exposed through search, REST, GraphQL, or the UI. Ciphertext/secrets live in
    the reconciler's ops store or Vault.
 3. **AD is authoritative for identities/passwords** (runtime). NetBox models the
    infrastructure (domains, instances, shares, groups), not end users.
@@ -54,9 +55,10 @@ Endpoints are served at `/api/plugins/fileserver/`:
 - `shares/`
 - `domain-groups/`
 
-The reconciler reads desired state from these endpoints and PATCHes the observed
-fields (`status`, `version`, `nc_mount_id`, `notify_active`, `ldaps_cert_expiry`)
-back.
+The reconciler reads desired state from these endpoints and PATCHes observed
+fields back. Deployment `status` is writable only for the `File Server
+Reconcilers` service-account group; tenant/admin approval uses
+`deployments/{id}/approve/`.
 
 See [docs/enrollment.md](docs/enrollment.md) for the enrollment token and
 pending-approval lifecycle contract.
