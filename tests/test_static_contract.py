@@ -209,11 +209,13 @@ def test_api_router_registers_all_collections():
 def test_api_serializers_expose_plaintext_only_on_mint_or_agent_submit():
     src = read("api/serializers.py")
     # secret_ref is a pointer. Enrollment plaintext is never a model field; it
-    # appears only as a read-only mint response or write-only agent input.
+    # appears only as a read-only mint response or write-only agent input. The
+    # stored hash is written internally but never serialized.
     assert "_encrypted" not in src
     assert "token = serializers.CharField(read_only=True)" in src
     assert "token = serializers.CharField(write_only=True" in src
-    assert '"token_hash",' in src
+    assert '"token_hash",' not in src
+    assert 'data["token_hash"] = FileServerEnrollmentToken.hash_plaintext' in src
     assert '"token",' in src
     assert '"used_at",' in src
 
@@ -224,6 +226,8 @@ def test_api_actions_cover_enrollment_consume_and_deployment_approve():
     assert '@action(detail=False, methods=["post"], url_path="consume")' in src
     assert "change_fileserverenrollmenttoken" in src
     assert "Cloud Portal: {slug} :: Admins" in src
+    assert 'FileServerDeployment.objects.restrict(request.user, "change")' in src
+    assert "global reconciler service identity boundary" in src
     assert "FileServerAgentEnrollSerializer" in src
 
 
@@ -284,7 +288,9 @@ def test_template_content_exposes_extensions():
 
 def test_search_registers_indexes():
     src = read("search.py")
-    assert src.count("@register_search") == 6
+    assert src.count("@register_search") == 5
+    assert "FileServerEnrollmentTokenIndex" not in src
+    assert "token_hash" not in src
 
 
 # ──────────────────────────────── Security ────────────────────────────
@@ -321,16 +327,40 @@ OBSERVED_FIELDS = (
 
 
 def test_serializers_keep_observed_fields_writable():
-    """The reconciler must be able to PATCH observed fields, so the existing
-    object serializers keep them writable. The enrollment token serializer has
-    separate read-only security fields."""
+    """The reconciler must be able to PATCH non-deployment observed fields, so
+    those object serializers keep them writable. Deployment status has a
+    reconciler-only serializer because it gates the approval state machine."""
     src = read("api/serializers.py")
     assert src.count('read_only_fields = ("created", "last_updated")') == 5
+    assert 'read_only_fields = ("status", "created", "last_updated")' in src
+    assert "class FileServerDeploymentReconcilerSerializer" in src
+    assert "allow_reconciler_status_write" in src
     # Belt-and-suspenders: no observed field name appears on a read_only line.
     for line in src.splitlines():
         if "read_only_fields" in line:
             for field in OBSERVED_FIELDS:
                 assert field not in line, f"{field} must stay writable"
+
+
+def test_deployment_status_transitions_are_guarded():
+    models_src = read("models.py")
+    forms_src = read("forms.py")
+    views_src = read("api/views.py")
+
+    assert "def _validate_status_transition(self) -> None:" in models_src
+    assert "Deployment status may only be changed through the approve" in models_src
+    assert "allow_reconciler_status_write" in models_src
+    assert "STATUS_PENDING_APPROVAL" in models_src
+    assert "_DEPLOYMENT_APPROVAL_STATUSES" in models_src
+    assert "FileServerDeploymentReconcilerSerializer" in views_src
+    assert 'FILESERVER_RECONCILER_GROUP_NAME = "File Server Reconcilers"' in views_src
+
+    deployment_form = forms_src.split("class FileServerEnrollmentTokenForm")[0]
+    deployment_bulk = forms_src.split("class FileServerDeploymentBulkEditForm")[1].split(
+        "class FileServerEnrollmentTokenBulkEditForm"
+    )[0]
+    assert '"status"' not in deployment_form
+    assert "status = forms.ChoiceField" not in deployment_bulk
 
 
 def test_forms_exclude_reconciler_written_fields():
@@ -347,6 +377,21 @@ def test_forms_do_not_hardcode_a_none_queryset_fallback():
     src = read("forms.py")
     assert "from netbox_nms.models import NMSBackend" in src
     assert "FileServerDeployment.objects.none()" not in src
+
+
+def test_enrollment_token_hash_is_not_exposed_by_public_surfaces():
+    serializers = read("api/serializers.py")
+    graphql = read("graphql/types.py")
+    template = (PKG / "templates" / "netbox_fileserver" / "fileserverenrollmenttoken.html").read_text(
+        encoding="utf-8"
+    )
+    forms_src = read("forms.py")
+
+    assert '"token_hash",' not in serializers
+    assert 'fields="__all__")\nclass FileServerEnrollmentTokenType' not in graphql
+    assert '"token_hash"' not in graphql
+    assert "{{ object.token_hash }}" not in template
+    assert "PasswordInput(render_value=False)" in forms_src
 
 
 def test_bulk_edit_is_wired_for_all_models():

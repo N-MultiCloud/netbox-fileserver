@@ -41,7 +41,6 @@ class FileServerDeploymentForm(NetBoxModelForm):
         model = FileServerDeployment
         fields = (
             "tenant",
-            "status",
             "backend",
             "vlan",
             "prefix",
@@ -62,7 +61,7 @@ class FileServerEnrollmentTokenForm(NetBoxModelForm):
     )
     token = forms.CharField(
         required=False,
-        widget=forms.PasswordInput(render_value=True),
+        widget=forms.PasswordInput(render_value=False),
         help_text=(
             "Plaintext token to hash at save time. Use the REST API to mint and "
             "receive a generated token once."
@@ -171,9 +170,6 @@ class DomainGroupForm(NetBoxModelForm):
 class FileServerDeploymentBulkEditForm(NetBoxModelBulkEditForm):
     model = FileServerDeployment
 
-    status = forms.ChoiceField(
-        choices=add_blank_choice(DeploymentStatusChoices), required=False
-    )
     plan_gb = forms.IntegerField(required=False, label="Plan storage (GB)")
     plan_users = forms.IntegerField(required=False)
     description = forms.CharField(max_length=255, required=False)

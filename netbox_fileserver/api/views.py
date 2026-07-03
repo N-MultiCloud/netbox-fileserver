@@ -2,6 +2,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from netbox.api.viewsets import NetBoxModelViewSet
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 
 from ..choices import DeploymentStatusChoices
@@ -17,12 +18,15 @@ from .serializers import (
     DomainGroupSerializer,
     FileServerAgentEnrollSerializer,
     FileServerDeploymentApproveSerializer,
+    FileServerDeploymentReconcilerSerializer,
     FileServerDeploymentSerializer,
     FileServerEnrollmentTokenSerializer,
     FileShareSerializer,
     NextcloudInstanceSerializer,
     SambaDomainSerializer,
 )
+
+FILESERVER_RECONCILER_GROUP_NAME = "File Server Reconcilers"
 
 
 def _raise_drf_validation(exc: DjangoValidationError) -> None:
@@ -40,6 +44,12 @@ def _is_tenant_admin(user, tenant) -> bool:
     if not slug:
         return False
     return user.groups.filter(name=f"Cloud Portal: {slug} :: Admins").exists()
+
+
+def _is_reconciler_service_account(user) -> bool:
+    if not user or not user.is_authenticated:
+        return False
+    return user.groups.filter(name=FILESERVER_RECONCILER_GROUP_NAME).exists()
 
 
 def _token_context_payload(token: FileServerEnrollmentToken, agent_payload: dict) -> dict:
@@ -81,9 +91,21 @@ class FileServerDeploymentViewSet(NetBoxModelViewSet):
     ).prefetch_related("tags")
     serializer_class = FileServerDeploymentSerializer
 
+    def get_serializer_class(self):
+        if self.action in {"update", "partial_update"} and _is_reconciler_service_account(
+            self.request.user
+        ):
+            return FileServerDeploymentReconcilerSerializer
+        return super().get_serializer_class()
+
     @action(detail=True, methods=["post"], url_path="approve")
     def approve(self, request, pk=None):
-        deployment = self.get_object()
+        queryset = (
+            FileServerDeployment.objects.restrict(request.user, "change")
+            .select_related("tenant", "backend", "vlan", "prefix")
+            .prefetch_related("tags")
+        )
+        deployment = get_object_or_404(queryset, pk=pk)
         if not _is_tenant_admin(request.user, deployment.tenant):
             raise PermissionDenied(
                 "Staff or a tenant admin for this deployment is required."
@@ -110,6 +132,9 @@ class FileServerEnrollmentTokenViewSet(NetBoxModelViewSet):
 
     @action(detail=False, methods=["post"], url_path="consume")
     def consume(self, request):
+        # This remains a global reconciler service identity boundary. Do not grant
+        # tenant-scoped users this permission; object-less checks match any holder
+        # of a constrained grant before the submitted token is known.
         if not request.user.has_perm(
             "netbox_fileserver.change_fileserverenrollmenttoken"
         ):

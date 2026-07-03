@@ -11,7 +11,7 @@
         <tr><th scope="row">Target deployment</th><td>{{ object.target_deployment|linkify|placeholder }}</td></tr>
         <tr><th scope="row">Expires</th><td>{{ object.expires_at|placeholder }}</td></tr>
         <tr><th scope="row">Used</th><td>{{ object.used_at|placeholder }}</td></tr>
-        <tr><th scope="row">Token hash</th><td><code>{{ object.token_hash }}</code></td></tr>
+        <tr><th scope="row">Token hash</th><td>Stored, not displayed</td></tr>
       </table>
     </div>
     {% include 'inc/panels/custom_fields.html' %}

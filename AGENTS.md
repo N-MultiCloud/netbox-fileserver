@@ -16,9 +16,10 @@ object), `DomainGroup`.
 1. **No secrets at rest.** `secret_ref` is a pointer (Vault path), never
    ciphertext. Enrollment tokens persist only `token_hash` (SHA-256), never
    plaintext. Do not add encrypted fields or import `netbox_nms.encryption`.
-2. **Observed fields** (`status`, `version`, `nc_mount_id`, `notify_active`,
+2. **Observed fields** (`version`, `nc_mount_id`, `notify_active`,
    `ldaps_cert_expiry`, `ldap_config_id`) are reconciler-written — API-writable,
-   not in the forms.
+   not in the forms. `FileServerDeployment.status` is writable only through the
+   `approve` action or the `File Server Reconcilers` service-account API path.
 3. **End users are not modeled** — only `DomainGroup`.
 4. **No** `eval`/`exec`/`os.system`/`pickle.loads`/`innerHTML`/
    `dangerouslySetInnerHTML` (enforced by the static-contract test).
@@ -44,7 +45,8 @@ object), `DomainGroup`.
   stores only `token_hash`.
 - `POST /api/plugins/fileserver/enrollment-tokens/consume/` accepts the agent
   enrollment payload (`token`, `vmid`, `hostname`, `ips`, `realm`, `netbios`),
-  requires `change_fileserverenrollmenttoken`, and marks the token used.
+  requires a global service identity with `change_fileserverenrollmenttoken`,
+  and marks the token used.
 - `POST /api/plugins/fileserver/deployments/{id}/approve/` lets staff/superusers
   or `Cloud Portal: <tenant-slug> :: Admins` approve `pending_approval`
   deployments into `planned` or `active`.
