@@ -23,7 +23,7 @@ to match and writes observed status back. Depends on
 netbox_fileserver/
 ├── __init__.py           NetBoxFileServerConfig (base_url="fileserver", required_plugins=["netbox_nms"])
 ├── choices.py            DeploymentStatusChoices, ACLRoleChoices, SambaFunctionalLevelChoices
-├── models.py             FileServerDeployment, SambaDomain, NextcloudInstance, FileShare, DomainGroup
+├── models.py             FileServerDeployment, FileServerEnrollmentToken, SambaDomain, NextcloudInstance, FileShare, DomainGroup
 ├── filtersets.py         NetBoxModelFilterSet subclasses
 ├── forms.py              NetBoxModelForm + filter forms
 ├── tables.py             NetBoxTable subclasses
@@ -35,6 +35,8 @@ netbox_fileserver/
 ├── api/                  DRF serializers, viewsets, NetBoxRouter
 ├── graphql/              strawberry_django types + schema
 ├── migrations/0001_initial.py
+├── migrations/0002_fileserverenrollmenttoken.py
+├── docs/enrollment.md    Enrollment token + pending-approval API contract
 └── templates/netbox_fileserver/…   flat detail templates + inc/ panels
 ```
 
@@ -63,8 +65,10 @@ define this integration surface are vendored at
 ## Critical Rules
 
 1. **No secrets at rest in NetBox.** `FileServerDeployment.secret_ref` is a
-   pointer (e.g. a Vault path) — never ciphertext. Do **not** add encrypted
-   secret fields or import `netbox_nms.encryption` here.
+   pointer (e.g. a Vault path) — never ciphertext. `FileServerEnrollmentToken`
+   stores only a SHA-256 `token_hash`; plaintext is returned only once when
+   minted and is never persisted. Do **not** add encrypted secret fields or
+   import `netbox_nms.encryption` here.
 2. **Observed fields are reconciler-written**: `status`, `NextcloudInstance.version`,
    `FileShare.nc_mount_id` / `notify_active`, `SambaDomain.ldaps_cert_expiry`,
    `NextcloudInstance.ldap_config_id`. They are API-writable (not read-only) and
@@ -82,6 +86,15 @@ define this integration surface are vendored at
 - `FileServerDeployment.backend` → `netbox_nms.NMSBackend` is the reconciler the
   webhook/loop drives. `nms-backend` proxies plugin CRUD at
   `/netbox/netbox-fileserver/plugin/*` (registered in its `KNOWN_PLUGINS`).
+- Enrollment: `POST /api/plugins/fileserver/enrollment-tokens/consume/` accepts
+  `token`, `vmid`, `hostname`, `ips`, `realm`, and `netbios`, validates the
+  one-time tenant token, stamps `used_at`, and returns tenant plus optional
+  deployment context. The reconciler performs all object writes after that
+  validation.
+- Pending approval: `POST /api/plugins/fileserver/deployments/{id}/approve/`
+  transitions `pending_approval` deployments to `planned` or `active`. It is
+  gated to staff/superusers or the tenant's
+  `Cloud Portal: <tenant-slug> :: Admins` group.
 - Deploy: `deploy-netbox-plugin fileserver` (whitelisted in
   `nmulticloud-context/deploy/bin/{deploy-netbox-plugin,nmc-deploy-lib}`), CI in
   `.gitea/workflows/deploy-production.yml` on push to `main`.

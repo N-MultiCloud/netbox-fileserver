@@ -6,6 +6,7 @@ app_name = "netbox_fileserver"
 
 router = NetBoxRouter()
 router.register("deployments", views.FileServerDeploymentViewSet)
+router.register("enrollment-tokens", views.FileServerEnrollmentTokenViewSet)
 router.register("samba-domains", views.SambaDomainViewSet)
 router.register("nextcloud-instances", views.NextcloudInstanceViewSet)
 router.register("shares", views.FileShareViewSet)

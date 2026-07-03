@@ -3,6 +3,7 @@ import strawberry_django
 from ..models import (
     DomainGroup,
     FileServerDeployment,
+    FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
     SambaDomain,
@@ -11,6 +12,11 @@ from ..models import (
 
 @strawberry_django.type(FileServerDeployment, fields="__all__")
 class FileServerDeploymentType:
+    pass
+
+
+@strawberry_django.type(FileServerEnrollmentToken, fields="__all__")
+class FileServerEnrollmentTokenType:
     pass
 
 

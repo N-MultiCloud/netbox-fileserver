@@ -3,6 +3,7 @@ from netbox.search import SearchIndex, register_search
 from .models import (
     DomainGroup,
     FileServerDeployment,
+    FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
     SambaDomain,
@@ -16,6 +17,14 @@ class FileServerDeploymentIndex(SearchIndex):
         ("fqdn", 100),
         ("secret_ref", 400),
         ("description", 500),
+    )
+
+
+@register_search
+class FileServerEnrollmentTokenIndex(SearchIndex):
+    model = FileServerEnrollmentToken
+    fields = (
+        ("token_hash", 500),
     )
 
 

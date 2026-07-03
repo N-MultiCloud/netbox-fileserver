@@ -4,6 +4,7 @@ from netbox.tables import NetBoxTable, columns
 from .models import (
     DomainGroup,
     FileServerDeployment,
+    FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
     SambaDomain,
@@ -47,6 +48,26 @@ class FileServerDeploymentTable(NetBoxTable):
         # Use the list view's Count() annotation when present; fall back to a
         # per-row count for tables rendered without it (e.g. bulk-edit).
         return value if value is not None else record.shares.count()
+
+
+class FileServerEnrollmentTokenTable(NetBoxTable):
+    tenant = tables.Column(linkify=True)
+    target_deployment = tables.Column(linkify=True, verbose_name="Target deployment")
+    used_at = columns.DateTimeColumn(verbose_name="Used")
+    expires_at = columns.DateTimeColumn(verbose_name="Expires")
+    actions = columns.ActionsColumn(actions=("edit", "delete"))
+
+    class Meta(NetBoxTable.Meta):
+        model = FileServerEnrollmentToken
+        fields = (
+            "pk",
+            "tenant",
+            "target_deployment",
+            "expires_at",
+            "used_at",
+            "actions",
+        )
+        default_columns = ("tenant", "target_deployment", "expires_at", "used_at")
 
 
 class SambaDomainTable(NetBoxTable):

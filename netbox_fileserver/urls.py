@@ -5,6 +5,7 @@ from . import views
 from .models import (
     DomainGroup,
     FileServerDeployment,
+    FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
     SambaDomain,
@@ -59,6 +60,17 @@ urlpatterns = [
         views.FileServerDeploymentBulkEditView,
         views.FileServerDeploymentBulkDeleteView,
         FileServerDeployment,
+    ),
+    *_model_urls(
+        "enrollment-tokens",
+        "fileserverenrollmenttoken",
+        views.FileServerEnrollmentTokenListView,
+        views.FileServerEnrollmentTokenView,
+        views.FileServerEnrollmentTokenEditView,
+        views.FileServerEnrollmentTokenDeleteView,
+        views.FileServerEnrollmentTokenBulkEditView,
+        views.FileServerEnrollmentTokenBulkDeleteView,
+        FileServerEnrollmentToken,
     ),
     *_model_urls(
         "samba-domains",

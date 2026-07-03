@@ -1,19 +1,78 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from netbox.api.viewsets import NetBoxModelViewSet
+from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.response import Response
 
+from ..choices import DeploymentStatusChoices
 from ..models import (
     DomainGroup,
     FileServerDeployment,
+    FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
     SambaDomain,
 )
 from .serializers import (
     DomainGroupSerializer,
+    FileServerAgentEnrollSerializer,
+    FileServerDeploymentApproveSerializer,
     FileServerDeploymentSerializer,
+    FileServerEnrollmentTokenSerializer,
     FileShareSerializer,
     NextcloudInstanceSerializer,
     SambaDomainSerializer,
 )
+
+
+def _raise_drf_validation(exc: DjangoValidationError) -> None:
+    if hasattr(exc, "message_dict"):
+        raise ValidationError(exc.message_dict) from exc
+    raise ValidationError({"detail": exc.messages}) from exc
+
+
+def _is_tenant_admin(user, tenant) -> bool:
+    if not user or not user.is_authenticated:
+        return False
+    if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+        return True
+    slug = getattr(tenant, "slug", "")
+    if not slug:
+        return False
+    return user.groups.filter(name=f"Cloud Portal: {slug} :: Admins").exists()
+
+
+def _token_context_payload(token: FileServerEnrollmentToken, agent_payload: dict) -> dict:
+    deployment = token.target_deployment
+    payload = {
+        "enrollment_token": {
+            "id": token.pk,
+            "expires_at": token.expires_at,
+            "used_at": token.used_at,
+        },
+        "tenant": {
+            "id": token.tenant_id,
+            "name": token.tenant.name,
+            "slug": token.tenant.slug,
+            "display": str(token.tenant),
+        },
+        "deployment": None,
+        "agent": {
+            "vmid": agent_payload["vmid"],
+            "hostname": agent_payload["hostname"],
+            "ips": agent_payload["ips"],
+            "realm": agent_payload["realm"],
+            "netbios": agent_payload["netbios"],
+        },
+    }
+    if deployment is not None:
+        payload["deployment"] = {
+            "id": deployment.pk,
+            "display": str(deployment),
+            "fqdn": deployment.fqdn,
+            "status": deployment.status,
+        }
+    return payload
 
 
 class FileServerDeploymentViewSet(NetBoxModelViewSet):
@@ -21,6 +80,54 @@ class FileServerDeploymentViewSet(NetBoxModelViewSet):
         "tenant", "backend", "vlan", "prefix"
     ).prefetch_related("tags")
     serializer_class = FileServerDeploymentSerializer
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
+        deployment = self.get_object()
+        if not _is_tenant_admin(request.user, deployment.tenant):
+            raise PermissionDenied(
+                "Staff or a tenant admin for this deployment is required."
+            )
+        serializer = FileServerDeploymentApproveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        target_status = serializer.validated_data.get(
+            "status", DeploymentStatusChoices.STATUS_PLANNED
+        )
+        try:
+            deployment.approve(status=target_status)
+        except DjangoValidationError as exc:
+            _raise_drf_validation(exc)
+        return Response(
+            self.get_serializer(deployment, context=self.get_serializer_context()).data
+        )
+
+
+class FileServerEnrollmentTokenViewSet(NetBoxModelViewSet):
+    queryset = FileServerEnrollmentToken.objects.select_related(
+        "tenant", "target_deployment"
+    ).prefetch_related("tags")
+    serializer_class = FileServerEnrollmentTokenSerializer
+
+    @action(detail=False, methods=["post"], url_path="consume")
+    def consume(self, request):
+        if not request.user.has_perm(
+            "netbox_fileserver.change_fileserverenrollmenttoken"
+        ):
+            raise PermissionDenied(
+                "change_fileserverenrollmenttoken permission is required."
+            )
+        serializer = FileServerAgentEnrollSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            token = FileServerEnrollmentToken.consume_plaintext(
+                serializer.validated_data["token"]
+            )
+        except DjangoValidationError as exc:
+            _raise_drf_validation(exc)
+        token = FileServerEnrollmentToken.objects.select_related(
+            "tenant", "target_deployment"
+        ).get(pk=token.pk)
+        return Response(_token_context_payload(token, serializer.validated_data))
 
 
 class SambaDomainViewSet(NetBoxModelViewSet):

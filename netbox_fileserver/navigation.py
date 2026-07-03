@@ -23,7 +23,10 @@ menu = PluginMenu(
     groups=(
         (
             "Deployments",
-            (_item("fileserverdeployment", "Deployments"),),
+            (
+                _item("fileserverdeployment", "Deployments"),
+                _item("fileserverenrollmenttoken", "Enrollment Tokens"),
+            ),
         ),
         (
             "Samba",

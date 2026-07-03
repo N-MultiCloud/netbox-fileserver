@@ -6,6 +6,7 @@ from .choices import DeploymentStatusChoices
 from .models import (
     DomainGroup,
     FileServerDeployment,
+    FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
     SambaDomain,
@@ -22,6 +23,25 @@ class FileServerDeploymentFilterSet(NetBoxModelFilterSet):
     class Meta:
         model = FileServerDeployment
         fields = ("id", "fqdn", "status", "tenant_id", "plan_gb", "plan_users")
+
+
+class FileServerEnrollmentTokenFilterSet(NetBoxModelFilterSet):
+    tenant_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=Tenant.objects.all(), field_name="tenant"
+    )
+    target_deployment_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=FileServerDeployment.objects.all(), field_name="target_deployment"
+    )
+    used = django_filters.BooleanFilter(method="filter_used")
+
+    class Meta:
+        model = FileServerEnrollmentToken
+        fields = ("id", "tenant_id", "target_deployment_id", "expires_at", "used")
+
+    def filter_used(self, queryset, _name, value):
+        if value:
+            return queryset.exclude(used_at__isnull=True)
+        return queryset.filter(used_at__isnull=True)
 
 
 class SambaDomainFilterSet(NetBoxModelFilterSet):

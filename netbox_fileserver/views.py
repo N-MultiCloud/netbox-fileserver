@@ -4,6 +4,7 @@ from netbox.views import generic
 from .filtersets import (
     DomainGroupFilterSet,
     FileServerDeploymentFilterSet,
+    FileServerEnrollmentTokenFilterSet,
     FileShareFilterSet,
     NextcloudInstanceFilterSet,
     SambaDomainFilterSet,
@@ -15,6 +16,9 @@ from .forms import (
     FileServerDeploymentBulkEditForm,
     FileServerDeploymentFilterForm,
     FileServerDeploymentForm,
+    FileServerEnrollmentTokenBulkEditForm,
+    FileServerEnrollmentTokenFilterForm,
+    FileServerEnrollmentTokenForm,
     FileShareBulkEditForm,
     FileShareFilterForm,
     FileShareForm,
@@ -28,6 +32,7 @@ from .forms import (
 from .models import (
     DomainGroup,
     FileServerDeployment,
+    FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
     SambaDomain,
@@ -35,6 +40,7 @@ from .models import (
 from .tables import (
     DomainGroupTable,
     FileServerDeploymentTable,
+    FileServerEnrollmentTokenTable,
     FileShareTable,
     NextcloudInstanceTable,
     SambaDomainTable,
@@ -84,6 +90,47 @@ class FileServerDeploymentBulkEditView(generic.BulkEditView):
 class FileServerDeploymentBulkDeleteView(generic.BulkDeleteView):
     queryset = FileServerDeployment.objects.all()
     table = FileServerDeploymentTable
+
+
+# ───────────────────── FileServerEnrollmentToken ─────────────────────
+
+
+class FileServerEnrollmentTokenListView(generic.ObjectListView):
+    queryset = FileServerEnrollmentToken.objects.select_related(
+        "tenant", "target_deployment"
+    )
+    table = FileServerEnrollmentTokenTable
+    filterset = FileServerEnrollmentTokenFilterSet
+    filterset_form = FileServerEnrollmentTokenFilterForm
+
+
+class FileServerEnrollmentTokenView(generic.ObjectView):
+    queryset = FileServerEnrollmentToken.objects.select_related(
+        "tenant", "target_deployment"
+    )
+
+
+class FileServerEnrollmentTokenEditView(generic.ObjectEditView):
+    queryset = FileServerEnrollmentToken.objects.all()
+    form = FileServerEnrollmentTokenForm
+
+
+class FileServerEnrollmentTokenDeleteView(generic.ObjectDeleteView):
+    queryset = FileServerEnrollmentToken.objects.all()
+
+
+class FileServerEnrollmentTokenBulkEditView(generic.BulkEditView):
+    queryset = FileServerEnrollmentToken.objects.select_related(
+        "tenant", "target_deployment"
+    )
+    filterset = FileServerEnrollmentTokenFilterSet
+    table = FileServerEnrollmentTokenTable
+    form = FileServerEnrollmentTokenBulkEditForm
+
+
+class FileServerEnrollmentTokenBulkDeleteView(generic.BulkDeleteView):
+    queryset = FileServerEnrollmentToken.objects.all()
+    table = FileServerEnrollmentTokenTable
 
 
 # ──────────────────────────── SambaDomain ────────────────────────────

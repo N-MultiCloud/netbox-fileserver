@@ -9,6 +9,7 @@ class DeploymentStatusChoices(ChoiceSet):
     the NetBox UI and the portal read the same truth.
     """
 
+    STATUS_PENDING_APPROVAL = "pending_approval"
     STATUS_PLANNED = "planned"
     STATUS_PROVISIONING = "provisioning"
     STATUS_ACTIVE = "active"
@@ -18,6 +19,7 @@ class DeploymentStatusChoices(ChoiceSet):
     STATUS_DECOMMISSIONED = "decommissioned"
 
     CHOICES = [
+        (STATUS_PENDING_APPROVAL, "Pending approval", "yellow"),
         (STATUS_PLANNED, "Planned", "gray"),
         (STATUS_PROVISIONING, "Provisioning", "cyan"),
         (STATUS_ACTIVE, "Active", "green"),

@@ -4,6 +4,7 @@ import strawberry_django
 from .types import (
     DomainGroupType,
     FileServerDeploymentType,
+    FileServerEnrollmentTokenType,
     FileShareType,
     NextcloudInstanceType,
     SambaDomainType,
@@ -14,6 +15,9 @@ from .types import (
 class NetBoxFileServerQuery:
     fileserver_deployment: FileServerDeploymentType = strawberry_django.field()
     fileserver_deployment_list: list[FileServerDeploymentType] = strawberry_django.field()
+
+    fileserver_enrollment_token: FileServerEnrollmentTokenType = strawberry_django.field()
+    fileserver_enrollment_token_list: list[FileServerEnrollmentTokenType] = strawberry_django.field()
 
     samba_domain: SambaDomainType = strawberry_django.field()
     samba_domain_list: list[SambaDomainType] = strawberry_django.field()

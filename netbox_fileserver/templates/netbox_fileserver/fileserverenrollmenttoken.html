@@ -1,0 +1,21 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">File Server Enrollment Token</h2>
+      <table class="table table-hover attr-table">
+        <tr><th scope="row">Tenant</th><td>{{ object.tenant|linkify|placeholder }}</td></tr>
+        <tr><th scope="row">Target deployment</th><td>{{ object.target_deployment|linkify|placeholder }}</td></tr>
+        <tr><th scope="row">Expires</th><td>{{ object.expires_at|placeholder }}</td></tr>
+        <tr><th scope="row">Used</th><td>{{ object.used_at|placeholder }}</td></tr>
+        <tr><th scope="row">Token hash</th><td><code>{{ object.token_hash }}</code></td></tr>
+      </table>
+    </div>
+    {% include 'inc/panels/custom_fields.html' %}
+    {% include 'inc/panels/tags.html' %}
+  </div>
+</div>
+{% endblock content %}

@@ -69,10 +69,11 @@ def test_plugin_version_bounds():
 # ─────────────────────────────── Models ───────────────────────────────
 
 
-def test_all_five_models_present():
+def test_all_six_models_present():
     src = read("models.py")
     for cls in (
         "class FileServerDeployment(NetBoxModel):",
+        "class FileServerEnrollmentToken(NetBoxModel):",
         "class SambaDomain(NetBoxModel):",
         "class NextcloudInstance(NetBoxModel):",
         "class FileShare(NetBoxModel):",
@@ -103,6 +104,23 @@ def test_deployment_tenant_is_protected_one_to_one():
     assert 'to="tenancy.Tenant"' in src
     assert "on_delete=models.PROTECT" in src
     assert 'related_name="fileserver_deployment"' in src
+
+
+def test_enrollment_token_is_hash_only_one_time_and_tenant_scoped():
+    src = read("models.py")
+    assert "class FileServerEnrollmentToken(NetBoxModel):" in src
+    assert "token_hash = models.CharField(" in src
+    assert "hashlib.sha256" in src
+    assert "hmac.compare_digest" in src
+    assert "secrets.token_urlsafe" in src
+    assert "used_at = models.DateTimeField" in src
+    assert "expires_at = models.DateTimeField" in src
+    assert 'to="tenancy.Tenant"' in src
+    assert 'to="netbox_fileserver.FileServerDeployment"' in src
+    assert "select_for_update()" in src
+    assert "def mint_token(" in src
+    assert "def consume_plaintext(" in src
+    assert "token = models." not in src
 
 
 def test_fileshare_is_the_integration_object():
@@ -151,7 +169,14 @@ def test_observed_fields_present():
 
 def test_deployment_status_lifecycle():
     src = read("choices.py")
-    for value in ("planned", "provisioning", "active", "failed", "decommissioning"):
+    for value in (
+        "pending_approval",
+        "planned",
+        "provisioning",
+        "active",
+        "failed",
+        "decommissioning",
+    ):
         assert f'"{value}"' in src, value
 
 
@@ -170,6 +195,7 @@ def test_api_router_registers_all_collections():
     assert "router = NetBoxRouter()" in src
     for path in (
         "deployments",
+        "enrollment-tokens",
         "samba-domains",
         "nextcloud-instances",
         "shares",
@@ -178,11 +204,25 @@ def test_api_router_registers_all_collections():
         assert f'router.register("{path}"' in src, path
 
 
-def test_api_serializers_never_expose_a_secret_field():
+def test_api_serializers_expose_plaintext_only_on_mint_or_agent_submit():
     src = read("api/serializers.py")
-    # Only secret_ref (a pointer) may appear; no ciphertext/token fields.
+    # secret_ref is a pointer. Enrollment plaintext is never a model field; it
+    # appears only as a read-only mint response or write-only agent input.
     assert "_encrypted" not in src
-    assert '"token"' not in src
+    assert "token = serializers.CharField(read_only=True)" in src
+    assert "token = serializers.CharField(write_only=True" in src
+    assert '"token_hash",' in src
+    assert '"token",' in src
+    assert '"used_at",' in src
+
+
+def test_api_actions_cover_enrollment_consume_and_deployment_approve():
+    src = read("api/views.py")
+    assert '@action(detail=True, methods=["post"], url_path="approve")' in src
+    assert '@action(detail=False, methods=["post"], url_path="consume")' in src
+    assert "change_fileserverenrollmenttoken" in src
+    assert "Cloud Portal: {slug} :: Admins" in src
+    assert "FileServerAgentEnrollSerializer" in src
 
 
 # ────────────────────────────── Migration ─────────────────────────────
@@ -207,6 +247,21 @@ def test_migration_declares_all_models_and_deps():
         assert app in src, app
 
 
+def test_enrollment_token_migration_is_scoped_and_hash_only():
+    src = (PKG / "migrations" / "0002_fileserverenrollmenttoken.py").read_text(
+        encoding="utf-8"
+    )
+    assert src.count("migrations.CreateModel") == 1
+    assert "FileServerEnrollmentToken" in src
+    assert "token_hash" in src
+    assert "unique=True" in src
+    assert "expires_at" in src
+    assert "used_at" in src
+    assert "target_deployment" in src
+    assert "tenant" in src
+    assert "plaintext" not in src
+
+
 # ────────────────────────── Wiring / registration ─────────────────────
 
 
@@ -227,7 +282,7 @@ def test_template_content_exposes_extensions():
 
 def test_search_registers_indexes():
     src = read("search.py")
-    assert src.count("@register_search") == 5
+    assert src.count("@register_search") == 6
 
 
 # ──────────────────────────────── Security ────────────────────────────
@@ -245,6 +300,7 @@ def test_no_forbidden_patterns_in_python_sources():
 # (ClassName, url/template model name, url slug)
 MODELS = (
     ("FileServerDeployment", "fileserverdeployment", "deployments"),
+    ("FileServerEnrollmentToken", "fileserverenrollmenttoken", "enrollment-tokens"),
     ("SambaDomain", "sambadomain", "samba-domains"),
     ("NextcloudInstance", "nextcloudinstance", "nextcloud-instances"),
     ("FileShare", "fileshare", "shares"),
@@ -263,9 +319,9 @@ OBSERVED_FIELDS = (
 
 
 def test_serializers_keep_observed_fields_writable():
-    """The reconciler must be able to PATCH observed fields, so no serializer may
-    mark them read-only — every serializer's read_only_fields is exactly
-    (created, last_updated)."""
+    """The reconciler must be able to PATCH observed fields, so the existing
+    object serializers keep them writable. The enrollment token serializer has
+    separate read-only security fields."""
     src = read("api/serializers.py")
     assert src.count('read_only_fields = ("created", "last_updated")') == 5
     # Belt-and-suspenders: no observed field name appears on a read_only line.
@@ -295,8 +351,8 @@ def test_bulk_edit_is_wired_for_all_models():
     forms_src = read("forms.py")
     views_src = read("views.py")
     urls_src = read("urls.py")
-    assert forms_src.count("(NetBoxModelBulkEditForm):") == 5
-    assert views_src.count("(generic.BulkEditView):") == 5
+    assert forms_src.count("(NetBoxModelBulkEditForm):") == 6
+    assert views_src.count("(generic.BulkEditView):") == 6
     assert 'name=f"{name}_bulk_edit"' in urls_src
 
 

@@ -18,6 +18,7 @@ from .choices import DeploymentStatusChoices, SambaFunctionalLevelChoices
 from .models import (
     DomainGroup,
     FileServerDeployment,
+    FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
     SambaDomain,
@@ -52,6 +53,41 @@ class FileServerDeploymentForm(NetBoxModelForm):
             "comments",
             "tags",
         )
+
+
+class FileServerEnrollmentTokenForm(NetBoxModelForm):
+    tenant = DynamicModelChoiceField(queryset=Tenant.objects.all())
+    target_deployment = DynamicModelChoiceField(
+        queryset=FileServerDeployment.objects.all(), required=False
+    )
+    token = forms.CharField(
+        required=False,
+        widget=forms.PasswordInput(render_value=True),
+        help_text=(
+            "Plaintext token to hash at save time. Use the REST API to mint and "
+            "receive a generated token once."
+        ),
+    )
+
+    class Meta:
+        model = FileServerEnrollmentToken
+        fields = (
+            "tenant",
+            "target_deployment",
+            "expires_at",
+            "tags",
+        )
+
+    def clean(self):
+        data = super().clean()
+        token = (data.get("token") or "").strip()
+        if not self.instance.pk and not token:
+            raise forms.ValidationError(
+                "Supply a plaintext token here or create the token through the REST API."
+            )
+        if token:
+            self.instance.token_hash = FileServerEnrollmentToken.hash_plaintext(token)
+        return data
 
 
 class SambaDomainForm(NetBoxModelForm):
@@ -146,6 +182,14 @@ class FileServerDeploymentBulkEditForm(NetBoxModelBulkEditForm):
     nullable_fields = ("description", "comments")
 
 
+class FileServerEnrollmentTokenBulkEditForm(NetBoxModelBulkEditForm):
+    model = FileServerEnrollmentToken
+
+    expires_at = forms.DateTimeField(required=False)
+
+    nullable_fields = ()
+
+
 class SambaDomainBulkEditForm(NetBoxModelBulkEditForm):
     model = SambaDomain
 
@@ -199,6 +243,20 @@ class FileServerDeploymentFilterForm(NetBoxModelFilterSetForm):
     tenant_id = DynamicModelChoiceField(
         queryset=Tenant.objects.all(), required=False, label="Tenant"
     )
+
+
+class FileServerEnrollmentTokenFilterForm(NetBoxModelFilterSetForm):
+    model = FileServerEnrollmentToken
+
+    tenant_id = DynamicModelChoiceField(
+        queryset=Tenant.objects.all(), required=False, label="Tenant"
+    )
+    target_deployment_id = DynamicModelChoiceField(
+        queryset=FileServerDeployment.objects.all(),
+        required=False,
+        label="Target deployment",
+    )
+    used = forms.NullBooleanField(required=False)
 
 
 class SambaDomainFilterForm(NetBoxModelFilterSetForm):
