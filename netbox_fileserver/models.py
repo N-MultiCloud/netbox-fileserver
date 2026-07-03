@@ -262,8 +262,11 @@ class FileServerEnrollmentToken(NetBoxModel):
             raise ValidationError({"token": "Enrollment token is required."})
         hashed = cls.hash_plaintext(token)
         with transaction.atomic():
+            # Lock only the token row (`of=("self",)`): `target_deployment` is a
+            # nullable FK, so select_related() adds a LEFT OUTER JOIN, and Postgres
+            # cannot apply FOR UPDATE to the nullable side of an outer join.
             instance = (
-                cls.objects.select_for_update()
+                cls.objects.select_for_update(of=("self",))
                 .select_related("tenant", "target_deployment")
                 .filter(token_hash=hashed)
                 .first()

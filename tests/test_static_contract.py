@@ -117,7 +117,9 @@ def test_enrollment_token_is_hash_only_one_time_and_tenant_scoped():
     assert "expires_at = models.DateTimeField" in src
     assert 'to="tenancy.Tenant"' in src
     assert 'to="netbox_fileserver.FileServerDeployment"' in src
-    assert "select_for_update()" in src
+    # Row-scoped lock: `of=("self",)` locks only the token row (target_deployment
+    # is a nullable FK → LEFT JOIN → Postgres rejects FOR UPDATE on the null side).
+    assert 'select_for_update(of=("self",))' in src
     assert "def mint_token(" in src
     assert "def consume_plaintext(" in src
     assert "token = models." not in src
