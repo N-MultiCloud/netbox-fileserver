@@ -89,8 +89,12 @@ define this integration surface are vendored at
 ## NMS stack integration
 
 - `FileServerDeployment.backend` → `netbox_nms.NMSBackend` is the reconciler the
-  webhook/loop drives. `nms-backend` proxies plugin CRUD at
-  `/netbox/netbox-fileserver/plugin/*` (registered in its `KNOWN_PLUGINS`).
+  webhook/loop drives. **Not yet implemented**: `nms-backend` does not
+  currently proxy this plugin. There is no `netbox_fileserver` entry in
+  `nms-backend`'s `automation/netbox/plugin_discovery.py::KNOWN_PLUGINS` and no
+  dedicated `fileserver_plugin_proxy_router` (mirroring `pdm_plugin_proxy.py` /
+  `ceph_plugin_proxy.py`). Adding both is a remaining Phase 1 task, not a
+  shipped integration — see the Roadmap section below.
 - Enrollment: `POST /api/plugins/fileserver/enrollment-tokens/consume/` accepts
   `token`, `vmid`, `hostname`, `ips`, `realm`, and `netbios`, validates the
   one-time tenant token, stamps `used_at`, and returns tenant plus optional
@@ -120,3 +124,6 @@ Gitea sub-issues: golden LXC templates (`tpl-samba-dc`, `tpl-nextcloud`), the
 FastAPI reconciler (NetBox → Proxmox/Samba/Nextcloud, webhook + drift loop), the
 Next.js customer portal, network/edge (Traefik + per-tenant VLAN + WireGuard),
 and the ops baseline (PBS backups, synthetic probes, nightly drift report).
+Also outstanding: registering this plugin in `nms-backend` (`KNOWN_PLUGINS` entry
++ dedicated `fileserver_plugin_proxy_router`) so `/netbox/netbox-fileserver/plugin/*`
+actually exists — see "NMS stack integration" above.
