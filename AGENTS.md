@@ -7,6 +7,9 @@ Nextcloud) as **desired state**. NetBox = source of truth; an external NMS
 file-server backend reconciles and writes observed status back. Depends on
 `netbox-nms` (`NMSBackend` registry).
 
+Migration dependencies on NetBox core apps must target nodes present in both
+NetBox 4.5.8 and 4.6.x while the plugin advertises 4.5 compatibility.
+
 **Models:** `FileServerDeployment`, `FileServerEnrollmentToken`,
 `SambaDomain`, `NextcloudInstance`, `FileShare` (the SMB↔Nextcloud integration
 object), `DomainGroup`.
