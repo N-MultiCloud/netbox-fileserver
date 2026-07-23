@@ -11,7 +11,7 @@ dependencies = [
     # backend live in netbox-nms. Not published to public PyPI — resolved from
     # the local editable path in dev (see [tool.uv.sources]); CI runs static
     # tests only and never resolves this dependency.
-    "netbox-nms>=0.1.6,<0.2.0",
+    "netbox-nms>=0.1.8,<0.2.0",
 ]
 authors = [
     {name = "Emerson Felipe", email = "emerson.felipe@nmultifibra.com.br"},
