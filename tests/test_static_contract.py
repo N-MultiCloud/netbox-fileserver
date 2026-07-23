@@ -62,7 +62,7 @@ def test_plugin_requires_netbox_nms():
 
 def test_plugin_version_bounds():
     src = read("__init__.py")
-    assert 'min_version = "4.5.0"' in src
+    assert 'min_version = "4.5.8"' in src
     assert 'max_version = "4.6.99"' in src
 
 

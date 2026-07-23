@@ -65,9 +65,9 @@ pending-approval lifecycle contract.
 
 ## Requirements
 
-- NetBox 4.5.0 – 4.6.99
+- NetBox 4.5.8 – 4.6.99
 - Python ≥ 3.12
-- `netbox-nms` ≥ 0.1.6 (provides the `NMSBackend` connection registry)
+- `netbox-nms` ≥ 0.1.8, < 0.2.0 (provides the `NMSBackend` connection registry; older releases cannot migrate on NetBox 4.5.x)
 
 ## Install
 

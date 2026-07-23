@@ -12,7 +12,7 @@ class NetBoxFileServerConfig(PluginConfig):
     base_url = "fileserver"
     author = "Emerson Felipe"
     author_email = "emerson.felipe@nmultifibra.com.br"
-    min_version = "4.5.0"
+    min_version = "4.5.8"
     max_version = "4.6.99"
     # netbox-nms supplies the NMSBackend connection registry that a
     # FileServerDeployment points at (its reconciler backend). NetBox
