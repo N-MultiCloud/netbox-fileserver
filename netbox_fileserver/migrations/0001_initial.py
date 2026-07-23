@@ -13,11 +13,11 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('extras', '0139_alter_customfieldchoiceset_extra_choices'),
-        ('ipam', '0092_iprange_host_indexes'),
+        ('extras', '0134_owner'),
+        ('ipam', '0086_gfk_indexes'),
         ('netbox_nms', '0001_initial'),
-        ('tenancy', '0024_default_ordering_indexes'),
-        ('virtualization', '0056_virtualmachine_render_config_permission'),
+        ('tenancy', '0023_add_mptt_tree_indexes'),
+        ('virtualization', '0052_gfk_indexes'),
     ]
 
     operations = [

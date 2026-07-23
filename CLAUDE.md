@@ -17,6 +17,9 @@ to match and writes observed status back. Depends on
 [netbox-nms](https://git.nmulti.cloud/N-MultiCloud/netbox-nms) for the
 `NMSBackend` connection registry.
 
+Migration dependencies on NetBox core apps must target nodes present in both
+NetBox 4.5.8 and 4.6.x while the plugin advertises 4.5 compatibility.
+
 ## Plugin Layout
 
 ```

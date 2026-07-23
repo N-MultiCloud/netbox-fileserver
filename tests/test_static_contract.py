@@ -4,6 +4,7 @@ These assert the plugin's structural invariants by reading source text, so they
 run in CI without a NetBox/Django environment or a database.
 """
 
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +42,23 @@ FORBIDDEN_PATTERNS = (
     "subprocess.",
 )
 
+FORBIDDEN_MIGRATION_DEPENDENCIES = {
+    ("dcim", "0236_moduletype_component_counts"),
+    ("extras", "0138_customfieldchoiceset_choice_colors"),
+    ("extras", "0139_alter_customfieldchoiceset_extra_choices"),
+    ("ipam", "0090_vlangroup_recompute_total_vlan_ids"),
+    ("ipam", "0092_iprange_host_indexes"),
+    ("tenancy", "0024_default_ordering_indexes"),
+    ("virtualization", "0056_virtualmachine_render_config_permission"),
+}
+
+FORBIDDEN_MIGRATION_DEPENDENCY_PREFIXES = {
+    ("virtualization", "0053_"),
+    ("virtualization", "0054_"),
+    ("virtualization", "0055_"),
+    ("virtualization", "0056_"),
+}
+
 
 def read(rel: str) -> str:
     return (PKG / rel).read_text(encoding="utf-8")
@@ -64,6 +82,54 @@ def test_plugin_version_bounds():
     src = read("__init__.py")
     assert 'min_version = "4.5.0"' in src
     assert 'max_version = "4.6.99"' in src
+
+
+def _literal_dependency(node: ast.AST) -> tuple[str, str] | None:
+    if not isinstance(node, ast.Tuple) or len(node.elts) != 2:
+        return None
+    app_label, migration_name = node.elts
+    if not (
+        isinstance(app_label, ast.Constant)
+        and isinstance(app_label.value, str)
+        and isinstance(migration_name, ast.Constant)
+        and isinstance(migration_name.value, str)
+    ):
+        return None
+    return app_label.value, migration_name.value
+
+
+def test_migrations_do_not_depend_on_netbox_46_only_core_nodes():
+    violations: list[str] = []
+
+    for path in sorted((PKG / "migrations").glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            if not any(
+                isinstance(target, ast.Name) and target.id == "dependencies"
+                for target in node.targets
+            ):
+                continue
+            if not isinstance(node.value, ast.List):
+                continue
+            for dependency_node in node.value.elts:
+                dependency = _literal_dependency(dependency_node)
+                if dependency is None:
+                    continue
+                app_label, migration_name = dependency
+                if dependency in FORBIDDEN_MIGRATION_DEPENDENCIES:
+                    violations.append(f"{path.name}: {app_label}.{migration_name}")
+                for prefix_app_label, prefix in FORBIDDEN_MIGRATION_DEPENDENCY_PREFIXES:
+                    if app_label == prefix_app_label and migration_name.startswith(prefix):
+                        violations.append(f"{path.name}: {app_label}.{migration_name}")
+
+    assert not violations, (
+        "Plugin migrations must target NetBox core migration nodes present in "
+        f"both NetBox 4.5.8 and 4.6.x: {violations}"
+    )
 
 
 # ─────────────────────────────── Models ───────────────────────────────

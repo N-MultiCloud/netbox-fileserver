@@ -10,9 +10,9 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('extras', '0139_alter_customfieldchoiceset_extra_choices'),
+        ('extras', '0134_owner'),
         ('netbox_fileserver', '0001_initial'),
-        ('tenancy', '0024_default_ordering_indexes'),
+        ('tenancy', '0023_add_mptt_tree_indexes'),
     ]
 
     operations = [

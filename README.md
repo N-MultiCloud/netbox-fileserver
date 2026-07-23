@@ -69,6 +69,10 @@ pending-approval lifecycle contract.
 - Python ≥ 3.12
 - `netbox-nms` ≥ 0.1.6 (provides the `NMSBackend` connection registry)
 
+Migrations depend only on NetBox core migration nodes present in both NetBox
+4.5.8 and 4.6.x so the plugin can build its migration graph across the
+advertised compatibility window.
+
 ## Install
 
 ```bash
