@@ -32,11 +32,19 @@ def _model_urls(
     bulk_edit_view,
     bulk_delete_view,
     model,
+    *,
+    include_add=True,
 ):
-    """Standard NetBox object URL set for one model."""
-    return [
+    """Standard NetBox object URL set for one model.
+
+    ``include_add=False`` omits the ``<slug>/add/`` route for models whose
+    rows are exclusively reconciler-written (see Critical Rule 2 in
+    CLAUDE.md): their forms only expose ``tags``, so a UI-driven create would
+    fail ``full_clean()`` on the omitted required fields. Editing an existing
+    row and bulk delete remain available.
+    """
+    urls = [
         path(f"{slug}/", list_view.as_view(), name=f"{name}_list"),
-        path(f"{slug}/add/", edit_view.as_view(), name=f"{name}_add"),
         path(f"{slug}/edit/", bulk_edit_view.as_view(), name=f"{name}_bulk_edit"),
         path(f"{slug}/delete/", bulk_delete_view.as_view(), name=f"{name}_bulk_delete"),
         path(f"{slug}/<int:pk>/", detail_view.as_view(), name=name),
@@ -55,6 +63,9 @@ def _model_urls(
             kwargs={"model": model},
         ),
     ]
+    if include_add:
+        urls.insert(1, path(f"{slug}/add/", edit_view.as_view(), name=f"{name}_add"))
+    return urls
 
 
 urlpatterns = [
@@ -134,6 +145,7 @@ urlpatterns = [
         views.SambaServerStateBulkEditView,
         views.SambaServerStateBulkDeleteView,
         SambaServerState,
+        include_add=False,
     ),
     *_model_urls(
         "samba-config-files",
@@ -145,6 +157,7 @@ urlpatterns = [
         views.SambaConfigFileBulkEditView,
         views.SambaConfigFileBulkDeleteView,
         SambaConfigFile,
+        include_add=False,
     ),
     *_model_urls(
         "samba-config-snapshots",
@@ -156,6 +169,7 @@ urlpatterns = [
         views.SambaConfigSnapshotBulkEditView,
         views.SambaConfigSnapshotBulkDeleteView,
         SambaConfigSnapshot,
+        include_add=False,
     ),
     *_model_urls(
         "samba-observed-shares",
@@ -167,6 +181,7 @@ urlpatterns = [
         views.SambaObservedShareBulkEditView,
         views.SambaObservedShareBulkDeleteView,
         SambaObservedShare,
+        include_add=False,
     ),
     *_model_urls(
         "samba-observed-users",
@@ -178,6 +193,7 @@ urlpatterns = [
         views.SambaObservedUserBulkEditView,
         views.SambaObservedUserBulkDeleteView,
         SambaObservedUser,
+        include_add=False,
     ),
     *_model_urls(
         "samba-observed-groups",
@@ -189,6 +205,7 @@ urlpatterns = [
         views.SambaObservedGroupBulkEditView,
         views.SambaObservedGroupBulkDeleteView,
         SambaObservedGroup,
+        include_add=False,
     ),
     *_model_urls(
         "samba-sessions",
@@ -200,6 +217,7 @@ urlpatterns = [
         views.SambaSessionBulkEditView,
         views.SambaSessionBulkDeleteView,
         SambaSession,
+        include_add=False,
     ),
     *_model_urls(
         "samba-sync-runs",
@@ -211,5 +229,6 @@ urlpatterns = [
         views.SambaSyncRunBulkEditView,
         views.SambaSyncRunBulkDeleteView,
         SambaSyncRun,
+        include_add=False,
     ),
 ]

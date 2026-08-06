@@ -1,4 +1,5 @@
 from django.db.models import Count
+from netbox.object_actions import BulkDelete, BulkEdit, BulkExport, BulkImport, BulkRename
 from netbox.views import generic
 
 from .filtersets import (
@@ -328,12 +329,19 @@ class DomainGroupBulkDeleteView(generic.BulkDeleteView):
 
 # ─────────────────────────── Samba observed state ───────────────────────────
 
+# These 8 models are exclusively reconciler-written (Critical Rule 2 in
+# CLAUDE.md); their forms only expose ``tags`` (see forms.py), so the
+# generic "Add" action is omitted here to match the ``include_add=False``
+# URL set in urls.py rather than rendering a button with no route.
+OBSERVED_STATE_LIST_ACTIONS = (BulkImport, BulkExport, BulkEdit, BulkRename, BulkDelete)
+
 
 class SambaServerStateListView(generic.ObjectListView):
     queryset = SambaServerState.objects.select_related("domain")
     table = SambaServerStateTable
     filterset = SambaServerStateFilterSet
     filterset_form = SambaServerStateFilterForm
+    actions = OBSERVED_STATE_LIST_ACTIONS
 
 
 class SambaServerStateView(generic.ObjectView):
@@ -366,6 +374,7 @@ class SambaConfigFileListView(generic.ObjectListView):
     table = SambaConfigFileTable
     filterset = SambaConfigFileFilterSet
     filterset_form = SambaConfigFileFilterForm
+    actions = OBSERVED_STATE_LIST_ACTIONS
 
 
 class SambaConfigFileView(generic.ObjectView):
@@ -398,6 +407,7 @@ class SambaConfigSnapshotListView(generic.ObjectListView):
     table = SambaConfigSnapshotTable
     filterset = SambaConfigSnapshotFilterSet
     filterset_form = SambaConfigSnapshotFilterForm
+    actions = OBSERVED_STATE_LIST_ACTIONS
 
 
 class SambaConfigSnapshotView(generic.ObjectView):
@@ -430,6 +440,7 @@ class SambaObservedShareListView(generic.ObjectListView):
     table = SambaObservedShareTable
     filterset = SambaObservedShareFilterSet
     filterset_form = SambaObservedShareFilterForm
+    actions = OBSERVED_STATE_LIST_ACTIONS
 
 
 class SambaObservedShareView(generic.ObjectView):
@@ -462,6 +473,7 @@ class SambaObservedUserListView(generic.ObjectListView):
     table = SambaObservedUserTable
     filterset = SambaObservedUserFilterSet
     filterset_form = SambaObservedUserFilterForm
+    actions = OBSERVED_STATE_LIST_ACTIONS
 
 
 class SambaObservedUserView(generic.ObjectView):
@@ -494,6 +506,7 @@ class SambaObservedGroupListView(generic.ObjectListView):
     table = SambaObservedGroupTable
     filterset = SambaObservedGroupFilterSet
     filterset_form = SambaObservedGroupFilterForm
+    actions = OBSERVED_STATE_LIST_ACTIONS
 
 
 class SambaObservedGroupView(generic.ObjectView):
@@ -526,6 +539,7 @@ class SambaSessionListView(generic.ObjectListView):
     table = SambaSessionTable
     filterset = SambaSessionFilterSet
     filterset_form = SambaSessionFilterForm
+    actions = OBSERVED_STATE_LIST_ACTIONS
 
 
 class SambaSessionView(generic.ObjectView):
@@ -558,6 +572,7 @@ class SambaSyncRunListView(generic.ObjectListView):
     table = SambaSyncRunTable
     filterset = SambaSyncRunFilterSet
     filterset_form = SambaSyncRunFilterForm
+    actions = OBSERVED_STATE_LIST_ACTIONS
 
 
 class SambaSyncRunView(generic.ObjectView):

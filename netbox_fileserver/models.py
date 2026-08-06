@@ -60,18 +60,59 @@ _ALLOW_RECONCILER_STATUS_WRITE_ATTR = "_fileserver_allow_reconciler_status_write
 _REDACTED_VALUES = {"", "***", "<redacted>", "[redacted]", "redacted"}
 _SECRET_FIELD_NAMES = {
     "access key",
+    "access keys",
     "api key",
+    "api keys",
+    "api secret",
+    "api secrets",
+    "auth token",
+    "auth tokens",
+    "bearer token",
+    "bearer tokens",
+    "client secret",
+    "client secrets",
     "credential",
+    "credentials",
+    "encryption key",
+    "encryption keys",
+    "hash",
+    "hashes",
     "lm hash",
+    "lm hashes",
     "nt hash",
+    "nt hashes",
+    "nt password",
+    "nt passwords",
+    "passphrase",
+    "passphrases",
     "password",
+    "passwords",
+    "password hash",
+    "password hashes",
     "passwd",
     "private key",
+    "private keys",
+    "pwd",
+    "salt",
+    "salts",
     "secret",
+    "secrets",
+    "session key",
+    "session keys",
+    "ssh key",
+    "ssh keys",
+    "supplemental credential",
+    "supplemental credentials",
     "token",
+    "tokens",
 }
 _PRIVATE_KEY_MARKER_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE)
 _CREDENTIAL_URL_RE = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/:]+:[^\s/@]+@", re.IGNORECASE)
+# Splits camelCase/acronym-run names (sambaNTPassword, unicodePwd) into words
+# before normalization, so the secret-name denylist above matches directory
+# attribute names as well as underscore/space-separated ones.
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_ACRONYM_BOUNDARY_RE = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])")
 
 
 def _token_hash(plaintext: str) -> str:
@@ -79,7 +120,10 @@ def _token_hash(plaintext: str) -> str:
 
 
 def _normalized_sensitive_name(value: object) -> str:
-    return re.sub(r"[_\s-]+", " ", str(value).strip().lower())
+    text = str(value).strip()
+    text = _CAMEL_BOUNDARY_RE.sub(" ", text)
+    text = _ACRONYM_BOUNDARY_RE.sub(" ", text)
+    return re.sub(r"[_\s-]+", " ", text.lower())
 
 
 def _is_sensitive_name(value: object) -> bool:
@@ -130,6 +174,19 @@ def validate_no_secret_material(value: object, *, field_name: str) -> None:
             raise ValidationError(
                 {field_name: f"Secret-bearing assignment {key.strip()!r} is not permitted."}
             )
+
+
+def _validate_secret_free_fields(instance: models.Model, *field_names: str) -> None:
+    """Apply ``validate_no_secret_material`` to model fields at the ORM layer.
+
+    Runs on every ``full_clean()`` (forms and the admin/UI edit path included),
+    closing the gap left by the REST-only ``SecretSafeObservedSerializerMixin``
+    — a custom field or JSON payload entered through the UI never touches that
+    serializer. Always includes ``custom_field_data`` so an operator-configured
+    custom field cannot become a secret-storage bypass on any observed model.
+    """
+    for field_name in (*field_names, "custom_field_data"):
+        validate_no_secret_material(getattr(instance, field_name, None), field_name=field_name)
 
 
 class FileServerDeployment(NetBoxModel):
@@ -736,6 +793,10 @@ class SambaServerState(NetBoxModel):
     def __str__(self) -> str:
         return f"Samba state ({self.domain})"
 
+    def clean(self) -> None:
+        super().clean()
+        _validate_secret_free_fields(self)
+
 
 class SambaConfigFile(NetBoxModel):
     """Last fetched content and file metadata for one Samba config file."""
@@ -764,7 +825,7 @@ class SambaConfigFile(NetBoxModel):
 
     def clean(self) -> None:
         super().clean()
-        validate_no_secret_material(self.content, field_name="content")
+        _validate_secret_free_fields(self, "path", "content")
 
 
 class SambaConfigSnapshot(NetBoxModel):
@@ -789,7 +850,7 @@ class SambaConfigSnapshot(NetBoxModel):
 
     def clean(self) -> None:
         super().clean()
-        validate_no_secret_material(self.content, field_name="content")
+        _validate_secret_free_fields(self, "snapshot_id", "content")
 
 
 class SambaObservedShare(NetBoxModel):
@@ -826,7 +887,7 @@ class SambaObservedShare(NetBoxModel):
 
     def clean(self) -> None:
         super().clean()
-        validate_no_secret_material(self.raw_params, field_name="raw_params")
+        _validate_secret_free_fields(self, "name", "path", "raw_params")
 
 
 class SambaObservedUser(NetBoxModel):
@@ -851,6 +912,10 @@ class SambaObservedUser(NetBoxModel):
     def __str__(self) -> str:
         return self.username
 
+    def clean(self) -> None:
+        super().clean()
+        _validate_secret_free_fields(self, "username", "sid")
+
 
 class SambaObservedGroup(NetBoxModel):
     """Samba directory group membership observed for operations."""
@@ -872,6 +937,10 @@ class SambaObservedGroup(NetBoxModel):
 
     def __str__(self) -> str:
         return self.name
+
+    def clean(self) -> None:
+        super().clean()
+        _validate_secret_free_fields(self, "name", "sid", "members")
 
 
 class SambaSession(NetBoxModel):
@@ -896,6 +965,10 @@ class SambaSession(NetBoxModel):
 
     def __str__(self) -> str:
         return f"{self.username or 'anonymous'} on {self.share or self.machine}"
+
+    def clean(self) -> None:
+        super().clean()
+        _validate_secret_free_fields(self, "username", "machine", "remote_ip", "share")
 
 
 class SambaSyncRun(NetBoxModel):
@@ -929,4 +1002,4 @@ class SambaSyncRun(NetBoxModel):
 
     def clean(self) -> None:
         super().clean()
-        validate_no_secret_material(self.error_message, field_name="error_message")
+        _validate_secret_free_fields(self, "rpc_execution_ids", "error_message")

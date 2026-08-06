@@ -1,8 +1,11 @@
 # Samba Observed State
 
-The external File Server reconciler collects Samba runtime data through guarded
-`netbox-rpc` procedures and persists the sanitized result in this plugin. These
-rows describe what the Samba host is actually reporting; they are not desired
+This plugin defines the read-side contract for Samba observed state: the
+models, API, and UI that a Samba sync engine will populate once it collects
+runtime data through guarded `netbox-rpc` procedures and persists the
+sanitized result here (tracked as `netbox-fileserver#16`; not yet
+implemented — see this repo's `CLAUDE.md`). Once populated, these rows
+describe what the Samba host is actually reporting; they are not desired
 configuration and do not replace `SambaDomain`, `FileShare`, or `DomainGroup`.
 
 ## Data model
