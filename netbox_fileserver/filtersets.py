@@ -2,14 +2,26 @@ import django_filters
 from netbox.filtersets import NetBoxModelFilterSet
 from tenancy.models import Tenant
 
-from .choices import DeploymentStatusChoices
+from .choices import (
+    DeploymentStatusChoices,
+    SambaDriftStateChoices,
+    SambaSyncStatusChoices,
+)
 from .models import (
     DomainGroup,
     FileServerDeployment,
     FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
+    SambaConfigFile,
+    SambaConfigSnapshot,
     SambaDomain,
+    SambaObservedGroup,
+    SambaObservedShare,
+    SambaObservedUser,
+    SambaServerState,
+    SambaSession,
+    SambaSyncRun,
 )
 
 
@@ -102,3 +114,133 @@ class DomainGroupFilterSet(NetBoxModelFilterSet):
     class Meta:
         model = DomainGroup
         fields = ("id", "name", "domain_id")
+
+
+class SambaServerStateFilterSet(NetBoxModelFilterSet):
+    domain_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=SambaDomain.objects.all(), field_name="domain"
+    )
+    version = django_filters.CharFilter(lookup_expr="icontains")
+
+    class Meta:
+        model = SambaServerState
+        fields = (
+            "id",
+            "domain_id",
+            "version",
+            "smbd_active_state",
+            "nmbd_active_state",
+            "winbind_active_state",
+            "samba_ad_dc_active_state",
+            "testparm_ok",
+            "observed_at",
+        )
+
+
+class SambaConfigFileFilterSet(NetBoxModelFilterSet):
+    domain_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=SambaDomain.objects.all(), field_name="domain"
+    )
+    path = django_filters.CharFilter(lookup_expr="icontains")
+
+    class Meta:
+        model = SambaConfigFile
+        fields = (
+            "id",
+            "domain_id",
+            "path",
+            "sha256",
+            "is_primary",
+            "mtime",
+            "fetched_at",
+        )
+
+
+class SambaConfigSnapshotFilterSet(NetBoxModelFilterSet):
+    domain_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=SambaDomain.objects.all(), field_name="domain"
+    )
+    snapshot_id = django_filters.CharFilter(lookup_expr="icontains")
+
+    class Meta:
+        model = SambaConfigSnapshot
+        fields = ("id", "domain_id", "snapshot_id", "created")
+
+
+class SambaObservedShareFilterSet(NetBoxModelFilterSet):
+    domain_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=SambaDomain.objects.all(), field_name="domain"
+    )
+    name = django_filters.CharFilter(lookup_expr="icontains")
+    path = django_filters.CharFilter(lookup_expr="icontains")
+    drift_state = django_filters.MultipleChoiceFilter(choices=SambaDriftStateChoices)
+
+    class Meta:
+        model = SambaObservedShare
+        fields = (
+            "id",
+            "domain_id",
+            "name",
+            "path",
+            "browseable",
+            "read_only",
+            "guest_ok",
+            "drift_state",
+        )
+
+
+class SambaObservedUserFilterSet(NetBoxModelFilterSet):
+    domain_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=SambaDomain.objects.all(), field_name="domain"
+    )
+    username = django_filters.CharFilter(lookup_expr="icontains")
+    sid = django_filters.CharFilter(lookup_expr="icontains")
+
+    class Meta:
+        model = SambaObservedUser
+        fields = ("id", "domain_id", "username", "sid", "enabled", "last_logon")
+
+
+class SambaObservedGroupFilterSet(NetBoxModelFilterSet):
+    domain_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=SambaDomain.objects.all(), field_name="domain"
+    )
+    name = django_filters.CharFilter(lookup_expr="icontains")
+    sid = django_filters.CharFilter(lookup_expr="icontains")
+
+    class Meta:
+        model = SambaObservedGroup
+        fields = ("id", "domain_id", "name", "sid")
+
+
+class SambaSessionFilterSet(NetBoxModelFilterSet):
+    domain_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=SambaDomain.objects.all(), field_name="domain"
+    )
+    username = django_filters.CharFilter(lookup_expr="icontains")
+    machine = django_filters.CharFilter(lookup_expr="icontains")
+    share = django_filters.CharFilter(lookup_expr="icontains")
+
+    class Meta:
+        model = SambaSession
+        fields = (
+            "id",
+            "domain_id",
+            "username",
+            "machine",
+            "remote_ip",
+            "share",
+            "pid",
+            "opened_at",
+        )
+
+
+class SambaSyncRunFilterSet(NetBoxModelFilterSet):
+    domain_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=SambaDomain.objects.all(), field_name="domain"
+    )
+    status = django_filters.MultipleChoiceFilter(choices=SambaSyncStatusChoices)
+
+    class Meta:
+        model = SambaSyncRun
+        fields = ("id", "domain_id", "status", "started", "finished")

@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 
@@ -8,8 +9,36 @@ from ..models import (
     FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
+    SambaConfigFile,
+    SambaConfigSnapshot,
     SambaDomain,
+    SambaObservedGroup,
+    SambaObservedShare,
+    SambaObservedUser,
+    SambaServerState,
+    SambaSession,
+    SambaSyncRun,
+    validate_no_secret_material,
 )
+
+
+class SecretSafeObservedSerializerMixin:
+    """Reject embedded credential material from reconciler-owned payloads."""
+
+    secret_safe_fields: tuple[str, ...] = ()
+
+    def validate(self, data):
+        # NetBox's custom-fields serializer may expose the input name or its
+        # custom_field_data source in validated_data depending on the version.
+        # Guard both so inherited custom fields cannot become a secret bypass.
+        for field_name in (*self.secret_safe_fields, "custom_fields", "custom_field_data"):
+            if field_name not in data:
+                continue
+            try:
+                validate_no_secret_material(data[field_name], field_name=field_name)
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError(exc.message_dict) from exc
+        return super().validate(data)
 
 
 class FileServerDeploymentSerializer(NetBoxModelSerializer):
@@ -246,6 +275,251 @@ class DomainGroupSerializer(NetBoxModelSerializer):
             "domain",
             "name",
             "description",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        read_only_fields = ("created", "last_updated")
+
+
+class SambaServerStateSerializer(
+    SecretSafeObservedSerializerMixin, NetBoxModelSerializer
+):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_fileserver-api:sambaserverstate-detail"
+    )
+    secret_safe_fields = (
+        "version",
+        "smbd_active_state",
+        "smbd_sub_state",
+        "smbd_unit_file_state",
+        "nmbd_active_state",
+        "nmbd_sub_state",
+        "nmbd_unit_file_state",
+        "winbind_active_state",
+        "winbind_sub_state",
+        "winbind_unit_file_state",
+        "samba_ad_dc_active_state",
+        "samba_ad_dc_sub_state",
+        "samba_ad_dc_unit_file_state",
+        "config_sha256",
+    )
+
+    class Meta:
+        model = SambaServerState
+        fields = (
+            "id",
+            "url",
+            "display",
+            "domain",
+            "version",
+            "smbd_active_state",
+            "smbd_sub_state",
+            "smbd_unit_file_state",
+            "nmbd_active_state",
+            "nmbd_sub_state",
+            "nmbd_unit_file_state",
+            "winbind_active_state",
+            "winbind_sub_state",
+            "winbind_unit_file_state",
+            "samba_ad_dc_active_state",
+            "samba_ad_dc_sub_state",
+            "samba_ad_dc_unit_file_state",
+            "config_sha256",
+            "testparm_ok",
+            "observed_at",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        read_only_fields = ("created", "last_updated")
+
+
+class SambaConfigFileSerializer(
+    SecretSafeObservedSerializerMixin, NetBoxModelSerializer
+):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_fileserver-api:sambaconfigfile-detail"
+    )
+    secret_safe_fields = ("path", "content")
+
+    class Meta:
+        model = SambaConfigFile
+        fields = (
+            "id",
+            "url",
+            "display",
+            "domain",
+            "path",
+            "content",
+            "sha256",
+            "size",
+            "mtime",
+            "is_primary",
+            "fetched_at",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        read_only_fields = ("created", "last_updated")
+
+
+class SambaConfigSnapshotSerializer(
+    SecretSafeObservedSerializerMixin, NetBoxModelSerializer
+):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_fileserver-api:sambaconfigsnapshot-detail"
+    )
+    secret_safe_fields = ("snapshot_id", "content")
+
+    class Meta:
+        model = SambaConfigSnapshot
+        fields = (
+            "id",
+            "url",
+            "display",
+            "domain",
+            "snapshot_id",
+            "content",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        read_only_fields = ("created", "last_updated")
+
+
+class SambaObservedShareSerializer(
+    SecretSafeObservedSerializerMixin, NetBoxModelSerializer
+):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_fileserver-api:sambaobservedshare-detail"
+    )
+    secret_safe_fields = ("name", "path", "raw_params")
+
+    class Meta:
+        model = SambaObservedShare
+        fields = (
+            "id",
+            "url",
+            "display",
+            "domain",
+            "name",
+            "path",
+            "raw_params",
+            "browseable",
+            "read_only",
+            "guest_ok",
+            "drift_state",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        read_only_fields = ("created", "last_updated")
+
+
+class SambaObservedUserSerializer(
+    SecretSafeObservedSerializerMixin, NetBoxModelSerializer
+):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_fileserver-api:sambaobserveduser-detail"
+    )
+    secret_safe_fields = ("username", "sid")
+
+    class Meta:
+        model = SambaObservedUser
+        fields = (
+            "id",
+            "url",
+            "display",
+            "domain",
+            "username",
+            "sid",
+            "enabled",
+            "last_logon",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        read_only_fields = ("created", "last_updated")
+
+
+class SambaObservedGroupSerializer(
+    SecretSafeObservedSerializerMixin, NetBoxModelSerializer
+):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_fileserver-api:sambaobservedgroup-detail"
+    )
+    secret_safe_fields = ("name", "sid", "members")
+
+    class Meta:
+        model = SambaObservedGroup
+        fields = (
+            "id",
+            "url",
+            "display",
+            "domain",
+            "name",
+            "sid",
+            "members",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        read_only_fields = ("created", "last_updated")
+
+
+class SambaSessionSerializer(SecretSafeObservedSerializerMixin, NetBoxModelSerializer):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_fileserver-api:sambasession-detail"
+    )
+    secret_safe_fields = ("username", "machine", "remote_ip", "share")
+
+    class Meta:
+        model = SambaSession
+        fields = (
+            "id",
+            "url",
+            "display",
+            "domain",
+            "username",
+            "machine",
+            "remote_ip",
+            "share",
+            "pid",
+            "opened_at",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        read_only_fields = ("created", "last_updated")
+
+
+class SambaSyncRunSerializer(SecretSafeObservedSerializerMixin, NetBoxModelSerializer):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_fileserver-api:sambasyncrun-detail"
+    )
+    secret_safe_fields = ("rpc_execution_ids", "error_message")
+
+    class Meta:
+        model = SambaSyncRun
+        fields = (
+            "id",
+            "url",
+            "display",
+            "domain",
+            "started",
+            "finished",
+            "status",
+            "rpc_execution_ids",
+            "error_message",
             "tags",
             "custom_fields",
             "created",

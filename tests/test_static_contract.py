@@ -135,7 +135,7 @@ def test_migrations_do_not_depend_on_netbox_46_only_core_nodes():
 # ─────────────────────────────── Models ───────────────────────────────
 
 
-def test_all_six_models_present():
+def test_all_fourteen_models_present():
     src = read("models.py")
     for cls in (
         "class FileServerDeployment(NetBoxModel):",
@@ -144,8 +144,113 @@ def test_all_six_models_present():
         "class NextcloudInstance(NetBoxModel):",
         "class FileShare(NetBoxModel):",
         "class DomainGroup(NetBoxModel):",
+        "class SambaServerState(NetBoxModel):",
+        "class SambaConfigFile(NetBoxModel):",
+        "class SambaConfigSnapshot(NetBoxModel):",
+        "class SambaObservedShare(NetBoxModel):",
+        "class SambaObservedUser(NetBoxModel):",
+        "class SambaObservedGroup(NetBoxModel):",
+        "class SambaSession(NetBoxModel):",
+        "class SambaSyncRun(NetBoxModel):",
     ):
         assert cls in src, cls
+
+
+def _model_field_names(class_name: str) -> set[str]:
+    tree = ast.parse(read("models.py"))
+    model_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    )
+    names = set()
+    for node in model_class.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or not isinstance(node.value, ast.Call):
+            continue
+        func = node.value.func
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "models"
+        ):
+            names.add(target.id)
+    return names
+
+
+def _model_field_types(class_name: str) -> dict[str, str]:
+    tree = ast.parse(read("models.py"))
+    model_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    )
+    fields = {}
+    for node in model_class.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or not isinstance(node.value, ast.Call):
+            continue
+        func = node.value.func
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "models"
+        ):
+            fields[target.id] = func.attr
+    return fields
+
+
+def _class_node(rel: str, class_name: str) -> ast.ClassDef:
+    tree = ast.parse(read(rel))
+    return next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    )
+
+
+def _form_meta_fields(class_name: str) -> tuple[str, ...]:
+    form_class = _class_node("forms.py", class_name)
+    meta_class = next(
+        node
+        for node in form_class.body
+        if isinstance(node, ast.ClassDef) and node.name == "Meta"
+    )
+    fields_assignment = next(
+        node
+        for node in meta_class.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "fields"
+            for target in node.targets
+        )
+    )
+    return ast.literal_eval(fields_assignment.value)
+
+
+def _migration_model_field_types(path: Path) -> dict[str, dict[str, str]]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    result = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr != "CreateModel":
+            continue
+        keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+        model_name = ast.literal_eval(keywords["name"])
+        fields = {}
+        for field_node in keywords["fields"].elts:
+            field_name = ast.literal_eval(field_node.elts[0])
+            field_call = field_node.elts[1]
+            assert isinstance(field_call, ast.Call)
+            assert isinstance(field_call.func, ast.Attribute)
+            fields[field_name] = field_call.func.attr
+        result[model_name] = fields
+    return result
 
 
 def test_deployment_secret_is_reference_only_not_ciphertext():
@@ -232,6 +337,87 @@ def test_observed_fields_present():
         assert field in src, field
 
 
+def test_samba_observed_models_declare_exact_fields():
+    for model_name, expected_fields in SAMBA_OBSERVED_MODEL_FIELDS.items():
+        assert _model_field_names(model_name) == set(expected_fields), model_name
+
+
+def test_samba_observed_models_cascade_from_domain_and_set_app_label():
+    src = read("models.py")
+    tree = ast.parse(src)
+    for model_name in SAMBA_OBSERVED_MODEL_FIELDS:
+        model_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == model_name
+        )
+        class_src = ast.get_source_segment(src, model_class)
+        assert class_src is not None
+        assert 'to="netbox_fileserver.SambaDomain"' in class_src, model_name
+        assert "on_delete=models.CASCADE" in class_src, model_name
+        assert 'app_label = "netbox_fileserver"' in class_src, model_name
+    assert _model_field_types("SambaServerState")["domain"] == "OneToOneField"
+    for model_name in set(SAMBA_OBSERVED_MODEL_FIELDS) - {"SambaServerState"}:
+        assert _model_field_types(model_name)["domain"] == "ForeignKey"
+
+
+def test_samba_observed_user_cannot_store_secret_material():
+    fields = _model_field_names("SambaObservedUser")
+    assert fields == {"domain", "username", "sid", "enabled", "last_logon"}
+    forbidden_fragments = (
+        "password",
+        "passwd",
+        "nt_hash",
+        "lm_hash",
+        "secret",
+        "ciphertext",
+        "credential",
+        "private_key",
+    )
+    assert not any(
+        fragment in field.lower()
+        for field in fields
+        for fragment in forbidden_fragments
+    )
+
+
+def test_observed_payloads_reject_embedded_secret_material():
+    models_src = read("models.py")
+    serializers_src = read("api/serializers.py")
+    assert "def validate_no_secret_material(" in models_src
+    assert "_PRIVATE_KEY_MARKER_RE" in models_src
+    assert "_CREDENTIAL_URL_RE" in models_src
+    assert "class SecretSafeObservedSerializerMixin:" in serializers_src
+    assert '"custom_fields", "custom_field_data"' in serializers_src
+
+    guarded_fields = {
+        "SambaServerState": {"version", "config_sha256"},
+        "SambaConfigFile": {"path", "content"},
+        "SambaConfigSnapshot": {"snapshot_id", "content"},
+        "SambaObservedShare": {"name", "path", "raw_params"},
+        "SambaObservedUser": {"username", "sid"},
+        "SambaObservedGroup": {"name", "sid", "members"},
+        "SambaSession": {"username", "machine", "remote_ip", "share"},
+        "SambaSyncRun": {"rpc_execution_ids", "error_message"},
+    }
+    for model_name, required_fields in guarded_fields.items():
+        serializer_class = _class_node("api/serializers.py", f"{model_name}Serializer")
+        assert any(
+            isinstance(base, ast.Name) and base.id == "SecretSafeObservedSerializerMixin"
+            for base in serializer_class.bases
+        ), model_name
+        field_assignment = next(
+            node
+            for node in serializer_class.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "secret_safe_fields"
+                for target in node.targets
+            )
+        )
+        assert required_fields <= set(ast.literal_eval(field_assignment.value)), model_name
+
+
 # ─────────────────────────────── Choices ──────────────────────────────
 
 
@@ -261,15 +447,8 @@ def test_acl_role_choices():
 def test_api_router_registers_all_collections():
     src = read("api/urls.py")
     assert "router = NetBoxRouter()" in src
-    for path in (
-        "deployments",
-        "enrollment-tokens",
-        "samba-domains",
-        "nextcloud-instances",
-        "shares",
-        "domain-groups",
-    ):
-        assert f'router.register("{path}"' in src, path
+    for _cls, _name, slug in MODELS:
+        assert f'router.register("{slug}"' in src, slug
 
 
 def test_api_serializers_expose_plaintext_only_on_mint_or_agent_submit():
@@ -334,6 +513,48 @@ def test_enrollment_token_migration_is_scoped_and_hash_only():
     assert "plaintext" not in src
 
 
+def test_samba_observed_migration_is_leaf_scoped_and_model_synced():
+    path = PKG / "migrations" / "0003_samba_observed_state.py"
+    src = path.read_text(encoding="utf-8")
+    tree = ast.parse(src, filename=str(path))
+    migration_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "Migration"
+    )
+    dependencies = next(
+        node
+        for node in migration_class.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "dependencies"
+            for target in node.targets
+        )
+    )
+    assert ast.literal_eval(dependencies.value) == [
+        ("netbox_fileserver", "0002_fileserverenrollmenttoken")
+    ]
+
+    migration_models = _migration_model_field_types(path)
+    assert set(migration_models) == set(SAMBA_OBSERVED_MODEL_FIELDS)
+    inherited_fields = {
+        "id": "BigAutoField",
+        "created": "DateTimeField",
+        "last_updated": "DateTimeField",
+        "custom_field_data": "JSONField",
+        "tags": "TaggableManager",
+    }
+    for model_name in SAMBA_OBSERVED_MODEL_FIELDS:
+        expected = inherited_fields | _model_field_types(model_name)
+        assert migration_models[model_name] == expected, model_name
+
+    assert src.count("on_delete=django.db.models.deletion.CASCADE") == 8
+    assert src.count('to="netbox_fileserver.sambadomain"') == 8
+    assert src.count("models.OneToOneField(") == 1
+    assert src.count("models.ForeignKey(") == 7
+    assert src.count("migrations.CreateModel(") == 8
+
+
 # ────────────────────────── Wiring / registration ─────────────────────
 
 
@@ -354,8 +575,28 @@ def test_template_content_exposes_extensions():
 
 def test_search_registers_indexes():
     src = read("search.py")
-    assert src.count("@register_search") == 5
-    assert "FileServerEnrollmentTokenIndex" not in src
+    searchable_models = {
+        "FileServerDeployment",
+        "SambaDomain",
+        "NextcloudInstance",
+        "FileShare",
+        "DomainGroup",
+        "SambaServerState",
+        "SambaObservedShare",
+        "SambaObservedUser",
+        "SambaObservedGroup",
+        "SambaSession",
+        "SambaSyncRun",
+    }
+    assert src.count("@register_search") == len(searchable_models)
+    for model_name in searchable_models:
+        assert f"class {model_name}Index(SearchIndex):" in src
+    for excluded_model in (
+        "FileServerEnrollmentToken",
+        "SambaConfigFile",
+        "SambaConfigSnapshot",
+    ):
+        assert f"class {excluded_model}Index(" not in src
     assert "token_hash" not in src
 
 
@@ -371,6 +612,68 @@ def test_no_forbidden_patterns_in_python_sources():
 
 # ─────────────────── Full CRUD surface + reconciler contract ───────────────────
 
+SAMBA_OBSERVED_MODEL_FIELDS = {
+    "SambaServerState": (
+        "domain",
+        "version",
+        "smbd_active_state",
+        "smbd_sub_state",
+        "smbd_unit_file_state",
+        "nmbd_active_state",
+        "nmbd_sub_state",
+        "nmbd_unit_file_state",
+        "winbind_active_state",
+        "winbind_sub_state",
+        "winbind_unit_file_state",
+        "samba_ad_dc_active_state",
+        "samba_ad_dc_sub_state",
+        "samba_ad_dc_unit_file_state",
+        "config_sha256",
+        "testparm_ok",
+        "observed_at",
+    ),
+    "SambaConfigFile": (
+        "domain",
+        "path",
+        "content",
+        "sha256",
+        "size",
+        "mtime",
+        "is_primary",
+        "fetched_at",
+    ),
+    "SambaConfigSnapshot": ("domain", "snapshot_id", "content"),
+    "SambaObservedShare": (
+        "domain",
+        "name",
+        "path",
+        "raw_params",
+        "browseable",
+        "read_only",
+        "guest_ok",
+        "drift_state",
+    ),
+    "SambaObservedUser": ("domain", "username", "sid", "enabled", "last_logon"),
+    "SambaObservedGroup": ("domain", "name", "sid", "members"),
+    "SambaSession": (
+        "domain",
+        "username",
+        "machine",
+        "remote_ip",
+        "share",
+        "pid",
+        "opened_at",
+    ),
+    "SambaSyncRun": (
+        "domain",
+        "started",
+        "finished",
+        "status",
+        "rpc_execution_ids",
+        "error_message",
+    ),
+}
+
 # (ClassName, url/template model name, url slug)
 MODELS = (
     ("FileServerDeployment", "fileserverdeployment", "deployments"),
@@ -379,6 +682,14 @@ MODELS = (
     ("NextcloudInstance", "nextcloudinstance", "nextcloud-instances"),
     ("FileShare", "fileshare", "shares"),
     ("DomainGroup", "domaingroup", "domain-groups"),
+    ("SambaServerState", "sambaserverstate", "samba-server-states"),
+    ("SambaConfigFile", "sambaconfigfile", "samba-config-files"),
+    ("SambaConfigSnapshot", "sambaconfigsnapshot", "samba-config-snapshots"),
+    ("SambaObservedShare", "sambaobservedshare", "samba-observed-shares"),
+    ("SambaObservedUser", "sambaobserveduser", "samba-observed-users"),
+    ("SambaObservedGroup", "sambaobservedgroup", "samba-observed-groups"),
+    ("SambaSession", "sambasession", "samba-sessions"),
+    ("SambaSyncRun", "sambasyncrun", "samba-sync-runs"),
 )
 
 # Reconciler-written (observed) fields — the external reconciler PATCHes these,
@@ -397,7 +708,7 @@ def test_serializers_keep_observed_fields_writable():
     those object serializers keep them writable. Deployment status has a
     reconciler-only serializer because it gates the approval state machine."""
     src = read("api/serializers.py")
-    assert src.count('read_only_fields = ("created", "last_updated")') == 5
+    assert src.count('read_only_fields = ("created", "last_updated")') == 13
     assert 'read_only_fields = ("status", "created", "last_updated")' in src
     assert "class FileServerDeploymentReconcilerSerializer" in src
     assert "allow_reconciler_status_write" in src
@@ -436,6 +747,19 @@ def test_forms_exclude_reconciler_written_fields():
     for field in OBSERVED_FIELDS:
         assert f'"{field}"' not in src, f"{field} must not be a form field"
 
+    for model_name, observed_fields in SAMBA_OBSERVED_MODEL_FIELDS.items():
+        assert _form_meta_fields(f"{model_name}Form") == ("tags",), model_name
+        bulk_form = _class_node("forms.py", f"{model_name}BulkEditForm")
+        bulk_assignments = {
+            target.id
+            for node in bulk_form.body
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+        assert bulk_assignments == {"model", "nullable_fields"}, model_name
+        assert not (set(observed_fields) & bulk_assignments), model_name
+
 
 def test_forms_do_not_hardcode_a_none_queryset_fallback():
     """netbox-nms is a required plugin — NMSBackend is imported directly, with no
@@ -464,8 +788,8 @@ def test_bulk_edit_is_wired_for_all_models():
     forms_src = read("forms.py")
     views_src = read("views.py")
     urls_src = read("urls.py")
-    assert forms_src.count("(NetBoxModelBulkEditForm):") == 6
-    assert views_src.count("(generic.BulkEditView):") == 6
+    assert forms_src.count("(NetBoxModelBulkEditForm):") == len(MODELS)
+    assert views_src.count("(generic.BulkEditView):") == len(MODELS)
     assert 'name=f"{name}_bulk_edit"' in urls_src
 
 
@@ -476,14 +800,45 @@ def test_every_model_has_the_full_plugin_surface():
     forms_src = read("forms.py")
     tables = read("tables.py")
     views_src = read("views.py")
-    for cls, _name, _slug in MODELS:
+    router = read("api/urls.py")
+    graphql_types = read("graphql/types.py")
+    graphql_schema = read("graphql/schema.py")
+    query_names = {
+        "FileServerDeployment": "fileserver_deployment",
+        "FileServerEnrollmentToken": "fileserver_enrollment_token",
+        "SambaDomain": "samba_domain",
+        "NextcloudInstance": "nextcloud_instance",
+        "FileShare": "file_share",
+        "DomainGroup": "domain_group",
+        "SambaServerState": "samba_server_state",
+        "SambaConfigFile": "samba_config_file",
+        "SambaConfigSnapshot": "samba_config_snapshot",
+        "SambaObservedShare": "samba_observed_share",
+        "SambaObservedUser": "samba_observed_user",
+        "SambaObservedGroup": "samba_observed_group",
+        "SambaSession": "samba_session",
+        "SambaSyncRun": "samba_sync_run",
+    }
+    for cls, _name, slug in MODELS:
         assert f"class {cls}Serializer(" in serializers, cls
         assert f"class {cls}ViewSet(" in api_views, cls
+        assert f'router.register("{slug}", views.{cls}ViewSet)' in router, cls
         assert f"class {cls}FilterSet(" in filtersets, cls
         assert f"class {cls}Form(" in forms_src, cls
         assert f"class {cls}BulkEditForm(" in forms_src, cls
         assert f"class {cls}Table(" in tables, cls
-        for suffix in ("ListView", "EditView", "DeleteView", "BulkEditView", "BulkDeleteView"):
+        assert f"class {cls}Type:" in graphql_types, cls
+        query_name = query_names[cls]
+        assert f"{query_name}: {cls}Type" in graphql_schema, cls
+        assert f"{query_name}_list: list[{cls}Type]" in graphql_schema, cls
+        for suffix in (
+            "ListView",
+            "View",
+            "EditView",
+            "DeleteView",
+            "BulkEditView",
+            "BulkDeleteView",
+        ):
             assert f"class {cls}{suffix}(" in views_src, f"{cls}{suffix}"
 
 

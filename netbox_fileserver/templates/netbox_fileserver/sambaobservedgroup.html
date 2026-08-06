@@ -1,0 +1,25 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Samba Observed Group</h2>
+      <table class="table table-hover attr-table">
+        <tr><th scope="row">Domain</th><td>{{ object.domain|linkify }}</td></tr>
+        <tr><th scope="row">Name</th><td>{{ object.name }}</td></tr>
+        <tr><th scope="row">SID</th><td>{{ object.sid|placeholder }}</td></tr>
+      </table>
+    </div>
+    {% include 'inc/panels/custom_fields.html' %}
+    {% include 'inc/panels/tags.html' %}
+  </div>
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Members</h2>
+      <div class="card-body"><pre class="mb-0 text-wrap">{{ object.members|json }}</pre></div>
+    </div>
+  </div>
+</div>
+{% endblock content %}

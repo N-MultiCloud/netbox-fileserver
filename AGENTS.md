@@ -10,9 +10,13 @@ file-server backend reconciles and writes observed status back. Depends on
 Migration dependencies on NetBox core apps must target nodes present in both
 NetBox 4.5.8 and 4.6.x while the plugin advertises 4.5 compatibility.
 
-**Models:** `FileServerDeployment`, `FileServerEnrollmentToken`,
-`SambaDomain`, `NextcloudInstance`, `FileShare` (the SMB↔Nextcloud integration
-object), `DomainGroup`.
+**Desired/product models:** `FileServerDeployment`,
+`FileServerEnrollmentToken`, `SambaDomain`, `NextcloudInstance`, `FileShare`
+(the SMB↔Nextcloud integration object), `DomainGroup`.
+
+**Samba observed-state models:** `SambaServerState`, `SambaConfigFile`,
+`SambaConfigSnapshot`, `SambaObservedShare`, `SambaObservedUser`,
+`SambaObservedGroup`, `SambaSession`, `SambaSyncRun`.
 
 ## Critical Rules
 
@@ -20,26 +24,33 @@ object), `DomainGroup`.
    ciphertext. Enrollment tokens persist only `token_hash` (SHA-256), never
    plaintext. Do not add encrypted fields or import `netbox_nms.encryption`.
 2. **Observed fields** (`version`, `nc_mount_id`, `notify_active`,
-   `ldaps_cert_expiry`, `ldap_config_id`) are reconciler-written — API-writable,
-   not in the forms. `FileServerDeployment.status` is writable only through the
-   `approve` action or the `File Server Reconcilers` service-account API path.
-3. **End users are not modeled** — only `DomainGroup`.
+   `ldaps_cert_expiry`, `ldap_config_id`, and every field on the eight Samba
+   observed-state models) are reconciler-written — API-writable, not in operator
+   forms. `FileServerDeployment.status` is writable only through the `approve`
+   action or the `File Server Reconcilers` service-account API path.
+3. **Desired end users are not modeled.** `DomainGroup` is the desired ACL
+   identity. `SambaObservedUser` is a non-secret operational mirror, not a
+   NetBox user; never add password/hash/key/ciphertext/credential fields.
 4. **No** `eval`/`exec`/`os.system`/`pickle.loads`/`innerHTML`/
    `dangerouslySetInnerHTML` (enforced by the static-contract test).
-5. Keep `migrations/0001_initial.py` consistent with `models.py`.
+5. Keep migrations consistent with `models.py`; observed-state changes belong
+   after leaf `0002_fileserverenrollmenttoken` in
+   `0003_samba_observed_state.py`.
 
 ## File Map
 
 | File | What it does |
 |---|---|
 | `netbox_fileserver/__init__.py` | Plugin config (`base_url="fileserver"`, `required_plugins=["netbox_nms"]`) |
-| `netbox_fileserver/models.py` | 6 Django models |
+| `netbox_fileserver/models.py` | 14 Django models (6 desired/product + 8 Samba observed) |
 | `netbox_fileserver/api/` | DRF serializers, viewsets, NetBoxRouter |
 | `netbox_fileserver/graphql/` | strawberry_django types + schema |
 | `netbox_fileserver/template_content.py` | Tenant + VM detail-page panels |
 | `netbox_fileserver/migrations/0001_initial.py` | Initial DB schema |
 | `netbox_fileserver/migrations/0002_fileserverenrollmenttoken.py` | Enrollment token schema |
+| `netbox_fileserver/migrations/0003_samba_observed_state.py` | Eight Samba observed-state tables |
 | `docs/enrollment.md` | Enrollment token + pending-approval API contract |
+| `docs/samba-observed-state.md` | Samba observed-state ownership, API, UI, and security contract |
 | `tests/test_static_contract.py` | Import-free contract tests (CI, no DB) |
 
 ## Enrollment Flow

@@ -14,14 +14,27 @@ from utilities.forms import add_blank_choice
 from utilities.forms.fields import DynamicModelChoiceField, JSONField
 from virtualization.models import VirtualMachine
 
-from .choices import DeploymentStatusChoices, SambaFunctionalLevelChoices
+from .choices import (
+    DeploymentStatusChoices,
+    SambaDriftStateChoices,
+    SambaFunctionalLevelChoices,
+    SambaSyncStatusChoices,
+)
 from .models import (
     DomainGroup,
     FileServerDeployment,
     FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
+    SambaConfigFile,
+    SambaConfigSnapshot,
     SambaDomain,
+    SambaObservedGroup,
+    SambaObservedShare,
+    SambaObservedUser,
+    SambaServerState,
+    SambaSession,
+    SambaSyncRun,
 )
 
 # ─────────────────────────── ModelForms ───────────────────────────
@@ -162,6 +175,56 @@ class DomainGroupForm(NetBoxModelForm):
         fields = ("domain", "name", "description", "tags")
 
 
+# Observed-state object data is reconciler-written. These forms intentionally
+# expose only NetBox metadata, never a domain relationship or observed value.
+class SambaServerStateForm(NetBoxModelForm):
+    class Meta:
+        model = SambaServerState
+        fields = ("tags",)
+
+
+class SambaConfigFileForm(NetBoxModelForm):
+    class Meta:
+        model = SambaConfigFile
+        fields = ("tags",)
+
+
+class SambaConfigSnapshotForm(NetBoxModelForm):
+    class Meta:
+        model = SambaConfigSnapshot
+        fields = ("tags",)
+
+
+class SambaObservedShareForm(NetBoxModelForm):
+    class Meta:
+        model = SambaObservedShare
+        fields = ("tags",)
+
+
+class SambaObservedUserForm(NetBoxModelForm):
+    class Meta:
+        model = SambaObservedUser
+        fields = ("tags",)
+
+
+class SambaObservedGroupForm(NetBoxModelForm):
+    class Meta:
+        model = SambaObservedGroup
+        fields = ("tags",)
+
+
+class SambaSessionForm(NetBoxModelForm):
+    class Meta:
+        model = SambaSession
+        fields = ("tags",)
+
+
+class SambaSyncRunForm(NetBoxModelForm):
+    class Meta:
+        model = SambaSyncRun
+        fields = ("tags",)
+
+
 # ─────────────────────────── Bulk-edit forms ───────────────────────────
 # Observed (reconciler-written) fields are intentionally excluded — operators
 # never bulk-set version/nc_mount_id/notify_active/ldaps_cert_expiry.
@@ -228,6 +291,46 @@ class DomainGroupBulkEditForm(NetBoxModelBulkEditForm):
     nullable_fields = ("description",)
 
 
+class SambaServerStateBulkEditForm(NetBoxModelBulkEditForm):
+    model = SambaServerState
+    nullable_fields = ()
+
+
+class SambaConfigFileBulkEditForm(NetBoxModelBulkEditForm):
+    model = SambaConfigFile
+    nullable_fields = ()
+
+
+class SambaConfigSnapshotBulkEditForm(NetBoxModelBulkEditForm):
+    model = SambaConfigSnapshot
+    nullable_fields = ()
+
+
+class SambaObservedShareBulkEditForm(NetBoxModelBulkEditForm):
+    model = SambaObservedShare
+    nullable_fields = ()
+
+
+class SambaObservedUserBulkEditForm(NetBoxModelBulkEditForm):
+    model = SambaObservedUser
+    nullable_fields = ()
+
+
+class SambaObservedGroupBulkEditForm(NetBoxModelBulkEditForm):
+    model = SambaObservedGroup
+    nullable_fields = ()
+
+
+class SambaSessionBulkEditForm(NetBoxModelBulkEditForm):
+    model = SambaSession
+    nullable_fields = ()
+
+
+class SambaSyncRunBulkEditForm(NetBoxModelBulkEditForm):
+    model = SambaSyncRun
+    nullable_fields = ()
+
+
 # ─────────────────────────── Filter forms ───────────────────────────
 
 
@@ -288,3 +391,80 @@ class DomainGroupFilterForm(NetBoxModelFilterSetForm):
     domain_id = DynamicModelChoiceField(
         queryset=SambaDomain.objects.all(), required=False, label="Domain"
     )
+
+
+class SambaServerStateFilterForm(NetBoxModelFilterSetForm):
+    model = SambaServerState
+    domain_id = DynamicModelChoiceField(
+        queryset=SambaDomain.objects.all(), required=False, label="Domain"
+    )
+    version = forms.CharField(required=False)
+    testparm_ok = forms.NullBooleanField(required=False, label="Testparm valid")
+
+
+class SambaConfigFileFilterForm(NetBoxModelFilterSetForm):
+    model = SambaConfigFile
+    domain_id = DynamicModelChoiceField(
+        queryset=SambaDomain.objects.all(), required=False, label="Domain"
+    )
+    path = forms.CharField(required=False)
+    sha256 = forms.CharField(required=False, label="SHA-256")
+    is_primary = forms.NullBooleanField(required=False, label="Primary config")
+
+
+class SambaConfigSnapshotFilterForm(NetBoxModelFilterSetForm):
+    model = SambaConfigSnapshot
+    domain_id = DynamicModelChoiceField(
+        queryset=SambaDomain.objects.all(), required=False, label="Domain"
+    )
+    snapshot_id = forms.CharField(required=False, label="Snapshot id")
+
+
+class SambaObservedShareFilterForm(NetBoxModelFilterSetForm):
+    model = SambaObservedShare
+    domain_id = DynamicModelChoiceField(
+        queryset=SambaDomain.objects.all(), required=False, label="Domain"
+    )
+    name = forms.CharField(required=False)
+    path = forms.CharField(required=False)
+    drift_state = forms.MultipleChoiceField(
+        choices=SambaDriftStateChoices, required=False
+    )
+
+
+class SambaObservedUserFilterForm(NetBoxModelFilterSetForm):
+    model = SambaObservedUser
+    domain_id = DynamicModelChoiceField(
+        queryset=SambaDomain.objects.all(), required=False, label="Domain"
+    )
+    username = forms.CharField(required=False)
+    sid = forms.CharField(required=False, label="SID")
+    enabled = forms.NullBooleanField(required=False)
+
+
+class SambaObservedGroupFilterForm(NetBoxModelFilterSetForm):
+    model = SambaObservedGroup
+    domain_id = DynamicModelChoiceField(
+        queryset=SambaDomain.objects.all(), required=False, label="Domain"
+    )
+    name = forms.CharField(required=False)
+    sid = forms.CharField(required=False, label="SID")
+
+
+class SambaSessionFilterForm(NetBoxModelFilterSetForm):
+    model = SambaSession
+    domain_id = DynamicModelChoiceField(
+        queryset=SambaDomain.objects.all(), required=False, label="Domain"
+    )
+    username = forms.CharField(required=False)
+    machine = forms.CharField(required=False)
+    remote_ip = forms.GenericIPAddressField(required=False, label="Remote IP")
+    share = forms.CharField(required=False)
+
+
+class SambaSyncRunFilterForm(NetBoxModelFilterSetForm):
+    model = SambaSyncRun
+    domain_id = DynamicModelChoiceField(
+        queryset=SambaDomain.objects.all(), required=False, label="Domain"
+    )
+    status = forms.MultipleChoiceField(choices=SambaSyncStatusChoices, required=False)

@@ -12,7 +12,15 @@ from ..models import (
     FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
+    SambaConfigFile,
+    SambaConfigSnapshot,
     SambaDomain,
+    SambaObservedGroup,
+    SambaObservedShare,
+    SambaObservedUser,
+    SambaServerState,
+    SambaSession,
+    SambaSyncRun,
 )
 from .serializers import (
     DomainGroupSerializer,
@@ -23,7 +31,15 @@ from .serializers import (
     FileServerEnrollmentTokenSerializer,
     FileShareSerializer,
     NextcloudInstanceSerializer,
+    SambaConfigFileSerializer,
+    SambaConfigSnapshotSerializer,
     SambaDomainSerializer,
+    SambaObservedGroupSerializer,
+    SambaObservedShareSerializer,
+    SambaObservedUserSerializer,
+    SambaServerStateSerializer,
+    SambaSessionSerializer,
+    SambaSyncRunSerializer,
 )
 
 FILESERVER_RECONCILER_GROUP_NAME = "File Server Reconcilers"
@@ -177,3 +193,43 @@ class FileShareViewSet(NetBoxModelViewSet):
 class DomainGroupViewSet(NetBoxModelViewSet):
     queryset = DomainGroup.objects.select_related("domain").prefetch_related("tags")
     serializer_class = DomainGroupSerializer
+
+
+class SambaServerStateViewSet(NetBoxModelViewSet):
+    queryset = SambaServerState.objects.select_related("domain").prefetch_related("tags")
+    serializer_class = SambaServerStateSerializer
+
+
+class SambaConfigFileViewSet(NetBoxModelViewSet):
+    queryset = SambaConfigFile.objects.select_related("domain").prefetch_related("tags")
+    serializer_class = SambaConfigFileSerializer
+
+
+class SambaConfigSnapshotViewSet(NetBoxModelViewSet):
+    queryset = SambaConfigSnapshot.objects.select_related("domain").prefetch_related("tags")
+    serializer_class = SambaConfigSnapshotSerializer
+
+
+class SambaObservedShareViewSet(NetBoxModelViewSet):
+    queryset = SambaObservedShare.objects.select_related("domain").prefetch_related("tags")
+    serializer_class = SambaObservedShareSerializer
+
+
+class SambaObservedUserViewSet(NetBoxModelViewSet):
+    queryset = SambaObservedUser.objects.select_related("domain").prefetch_related("tags")
+    serializer_class = SambaObservedUserSerializer
+
+
+class SambaObservedGroupViewSet(NetBoxModelViewSet):
+    queryset = SambaObservedGroup.objects.select_related("domain").prefetch_related("tags")
+    serializer_class = SambaObservedGroupSerializer
+
+
+class SambaSessionViewSet(NetBoxModelViewSet):
+    queryset = SambaSession.objects.select_related("domain").prefetch_related("tags")
+    serializer_class = SambaSessionSerializer
+
+
+class SambaSyncRunViewSet(NetBoxModelViewSet):
+    queryset = SambaSyncRun.objects.select_related("domain").prefetch_related("tags")
+    serializer_class = SambaSyncRunSerializer

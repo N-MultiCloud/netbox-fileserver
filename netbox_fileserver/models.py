@@ -13,7 +13,9 @@ from netbox.models import NetBoxModel
 from .choices import (
     ACLRoleChoices,
     DeploymentStatusChoices,
+    SambaDriftStateChoices,
     SambaFunctionalLevelChoices,
+    SambaSyncStatusChoices,
 )
 
 __all__ = (
@@ -23,6 +25,14 @@ __all__ = (
     "NextcloudInstance",
     "FileShare",
     "DomainGroup",
+    "SambaServerState",
+    "SambaConfigFile",
+    "SambaConfigSnapshot",
+    "SambaObservedShare",
+    "SambaObservedUser",
+    "SambaObservedGroup",
+    "SambaSession",
+    "SambaSyncRun",
 )
 
 # DNS label / FQDN for the customer's web-drive hostname (lowercase).
@@ -47,10 +57,79 @@ _DEPLOYMENT_APPROVAL_STATUSES = {
 }
 _ALLOW_APPROVAL_STATUS_WRITE_ATTR = "_fileserver_allow_approval_status_write"
 _ALLOW_RECONCILER_STATUS_WRITE_ATTR = "_fileserver_allow_reconciler_status_write"
+_REDACTED_VALUES = {"", "***", "<redacted>", "[redacted]", "redacted"}
+_SECRET_FIELD_NAMES = {
+    "access key",
+    "api key",
+    "credential",
+    "lm hash",
+    "nt hash",
+    "password",
+    "passwd",
+    "private key",
+    "secret",
+    "token",
+}
+_PRIVATE_KEY_MARKER_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE)
+_CREDENTIAL_URL_RE = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/:]+:[^\s/@]+@", re.IGNORECASE)
 
 
 def _token_hash(plaintext: str) -> str:
     return hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+
+
+def _normalized_sensitive_name(value: object) -> str:
+    return re.sub(r"[_\s-]+", " ", str(value).strip().lower())
+
+
+def _is_sensitive_name(value: object) -> bool:
+    name = _normalized_sensitive_name(value)
+    return name in _SECRET_FIELD_NAMES or any(
+        name.endswith(f" {suffix}") for suffix in _SECRET_FIELD_NAMES
+    )
+
+
+def _is_redacted(value: object) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return normalized in _REDACTED_VALUES or (
+        len(normalized) >= 3 and set(normalized) == {"*"}
+    )
+
+
+def validate_no_secret_material(value: object, *, field_name: str) -> None:
+    """Reject credential-bearing structured data or text before persistence."""
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            if _is_sensitive_name(key) and not _is_redacted(nested_value):
+                raise ValidationError(
+                    {field_name: f"Secret-bearing key {key!r} must be removed or redacted."}
+                )
+            validate_no_secret_material(nested_value, field_name=field_name)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for nested_value in value:
+            validate_no_secret_material(nested_value, field_name=field_name)
+        return
+    if not isinstance(value, str) or _is_redacted(value):
+        return
+    if _PRIVATE_KEY_MARKER_RE.search(value) or _CREDENTIAL_URL_RE.search(value):
+        raise ValidationError({field_name: "Private keys and inline credentials are not permitted."})
+    for line in value.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", ";")):
+            continue
+        separator = "=" if "=" in stripped else ":" if ":" in stripped else None
+        if separator is None:
+            continue
+        key, candidate = stripped.split(separator, 1)
+        if _is_sensitive_name(key) and not _is_redacted(candidate):
+            raise ValidationError(
+                {field_name: f"Secret-bearing assignment {key.strip()!r} is not permitted."}
+            )
 
 
 class FileServerDeployment(NetBoxModel):
@@ -603,8 +682,8 @@ class FileShare(NetBoxModel):
 
 class DomainGroup(NetBoxModel):
     """AD group referenced by share ACLs — modeled so ``acl_spec`` validates
-    against real groups. End users are NOT modeled; passwords/user churn stay
-    in AD (runtime state)."""
+    against real groups. Desired end users are NOT modeled; passwords/user churn
+    stay in AD (runtime state)."""
 
     domain = models.ForeignKey(
         to="netbox_fileserver.SambaDomain",
@@ -622,3 +701,232 @@ class DomainGroup(NetBoxModel):
 
     def __str__(self) -> str:
         return self.name
+
+
+class SambaServerState(NetBoxModel):
+    """Last observed Samba version, service health, and config validation."""
+
+    domain = models.OneToOneField(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="server_state",
+    )
+    version = models.CharField(max_length=100, blank=True)
+    smbd_active_state = models.CharField(max_length=30, blank=True)
+    smbd_sub_state = models.CharField(max_length=30, blank=True)
+    smbd_unit_file_state = models.CharField(max_length=30, blank=True)
+    nmbd_active_state = models.CharField(max_length=30, blank=True)
+    nmbd_sub_state = models.CharField(max_length=30, blank=True)
+    nmbd_unit_file_state = models.CharField(max_length=30, blank=True)
+    winbind_active_state = models.CharField(max_length=30, blank=True)
+    winbind_sub_state = models.CharField(max_length=30, blank=True)
+    winbind_unit_file_state = models.CharField(max_length=30, blank=True)
+    samba_ad_dc_active_state = models.CharField(max_length=30, blank=True)
+    samba_ad_dc_sub_state = models.CharField(max_length=30, blank=True)
+    samba_ad_dc_unit_file_state = models.CharField(max_length=30, blank=True)
+    config_sha256 = models.CharField(max_length=64, blank=True)
+    testparm_ok = models.BooleanField(default=False)
+    observed_at = models.DateTimeField()
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("domain",)
+        verbose_name = "Samba Server State"
+
+    def __str__(self) -> str:
+        return f"Samba state ({self.domain})"
+
+
+class SambaConfigFile(NetBoxModel):
+    """Last fetched content and file metadata for one Samba config file."""
+
+    domain = models.ForeignKey(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="config_files",
+    )
+    path = models.CharField(max_length=255)
+    content = models.TextField(blank=True)
+    sha256 = models.CharField(max_length=64)
+    size = models.PositiveBigIntegerField()
+    mtime = models.DateTimeField()
+    is_primary = models.BooleanField(default=False)
+    fetched_at = models.DateTimeField()
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("domain", "path")
+        unique_together = (("domain", "path"),)
+        verbose_name = "Samba Config File"
+
+    def __str__(self) -> str:
+        return self.path
+
+    def clean(self) -> None:
+        super().clean()
+        validate_no_secret_material(self.content, field_name="content")
+
+
+class SambaConfigSnapshot(NetBoxModel):
+    """Point-in-time archive of a Samba configuration file set."""
+
+    domain = models.ForeignKey(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="config_snapshots",
+    )
+    snapshot_id = models.CharField(max_length=128)
+    content = models.JSONField(default=dict)
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("domain", "-created")
+        unique_together = (("domain", "snapshot_id"),)
+        verbose_name = "Samba Config Snapshot"
+
+    def __str__(self) -> str:
+        return self.snapshot_id
+
+    def clean(self) -> None:
+        super().clean()
+        validate_no_secret_material(self.content, field_name="content")
+
+
+class SambaObservedShare(NetBoxModel):
+    """Effective Samba share state reported by the reconciler."""
+
+    domain = models.ForeignKey(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="observed_shares",
+    )
+    name = models.CharField(max_length=80)
+    path = models.CharField(max_length=255, blank=True)
+    raw_params = models.JSONField(default=dict, blank=True)
+    browseable = models.BooleanField(default=True)
+    read_only = models.BooleanField(default=True)
+    guest_ok = models.BooleanField(default=False)
+    drift_state = models.CharField(
+        max_length=30,
+        choices=SambaDriftStateChoices,
+        default=SambaDriftStateChoices.STATE_UNMANAGED,
+    )
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("domain", "name")
+        unique_together = (("domain", "name"),)
+        verbose_name = "Samba Observed Share"
+
+    def __str__(self) -> str:
+        return self.name
+
+    def get_drift_state_color(self) -> str | None:
+        return SambaDriftStateChoices.colors.get(self.drift_state)
+
+    def clean(self) -> None:
+        super().clean()
+        validate_no_secret_material(self.raw_params, field_name="raw_params")
+
+
+class SambaObservedUser(NetBoxModel):
+    """Non-secret Samba directory user metadata observed for operations."""
+
+    domain = models.ForeignKey(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="observed_users",
+    )
+    username = models.CharField(max_length=255)
+    sid = models.CharField(max_length=255, blank=True)
+    enabled = models.BooleanField(default=True)
+    last_logon = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("domain", "username")
+        unique_together = (("domain", "username"),)
+        verbose_name = "Samba Observed User"
+
+    def __str__(self) -> str:
+        return self.username
+
+
+class SambaObservedGroup(NetBoxModel):
+    """Samba directory group membership observed for operations."""
+
+    domain = models.ForeignKey(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="observed_groups",
+    )
+    name = models.CharField(max_length=255)
+    sid = models.CharField(max_length=255, blank=True)
+    members = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("domain", "name")
+        unique_together = (("domain", "name"),)
+        verbose_name = "Samba Observed Group"
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class SambaSession(NetBoxModel):
+    """One live connection reported by ``smbstatus``."""
+
+    domain = models.ForeignKey(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="sessions",
+    )
+    username = models.CharField(max_length=255, blank=True)
+    machine = models.CharField(max_length=255, blank=True)
+    remote_ip = models.GenericIPAddressField(null=True, blank=True)
+    share = models.CharField(max_length=80, blank=True)
+    pid = models.PositiveBigIntegerField()
+    opened_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("domain", "username", "machine", "share", "pid")
+        verbose_name = "Samba Session"
+
+    def __str__(self) -> str:
+        return f"{self.username or 'anonymous'} on {self.share or self.machine}"
+
+
+class SambaSyncRun(NetBoxModel):
+    """Audit record for one reconciler collection and fold operation."""
+
+    domain = models.ForeignKey(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="sync_runs",
+    )
+    started = models.DateTimeField(default=timezone.now)
+    finished = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(
+        max_length=30,
+        choices=SambaSyncStatusChoices,
+        default=SambaSyncStatusChoices.STATUS_RUNNING,
+    )
+    rpc_execution_ids = models.JSONField(default=list, blank=True)
+    error_message = models.TextField(blank=True)
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("-started",)
+        verbose_name = "Samba Sync Run"
+
+    def __str__(self) -> str:
+        return f"{self.domain} sync {self.pk or 'new'}"
+
+    def get_status_color(self) -> str | None:
+        return SambaSyncStatusChoices.colors.get(self.status)
+
+    def clean(self) -> None:
+        super().clean()
+        validate_no_secret_material(self.error_message, field_name="error_message")

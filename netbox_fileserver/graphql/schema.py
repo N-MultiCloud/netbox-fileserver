@@ -7,7 +7,15 @@ from .types import (
     FileServerEnrollmentTokenType,
     FileShareType,
     NextcloudInstanceType,
+    SambaConfigFileType,
+    SambaConfigSnapshotType,
     SambaDomainType,
+    SambaObservedGroupType,
+    SambaObservedShareType,
+    SambaObservedUserType,
+    SambaServerStateType,
+    SambaSessionType,
+    SambaSyncRunType,
 )
 
 
@@ -30,3 +38,27 @@ class NetBoxFileServerQuery:
 
     domain_group: DomainGroupType = strawberry_django.field()
     domain_group_list: list[DomainGroupType] = strawberry_django.field()
+
+    samba_server_state: SambaServerStateType = strawberry_django.field()
+    samba_server_state_list: list[SambaServerStateType] = strawberry_django.field()
+
+    samba_config_file: SambaConfigFileType = strawberry_django.field()
+    samba_config_file_list: list[SambaConfigFileType] = strawberry_django.field()
+
+    samba_config_snapshot: SambaConfigSnapshotType = strawberry_django.field()
+    samba_config_snapshot_list: list[SambaConfigSnapshotType] = strawberry_django.field()
+
+    samba_observed_share: SambaObservedShareType = strawberry_django.field()
+    samba_observed_share_list: list[SambaObservedShareType] = strawberry_django.field()
+
+    samba_observed_user: SambaObservedUserType = strawberry_django.field()
+    samba_observed_user_list: list[SambaObservedUserType] = strawberry_django.field()
+
+    samba_observed_group: SambaObservedGroupType = strawberry_django.field()
+    samba_observed_group_list: list[SambaObservedGroupType] = strawberry_django.field()
+
+    samba_session: SambaSessionType = strawberry_django.field()
+    samba_session_list: list[SambaSessionType] = strawberry_django.field()
+
+    samba_sync_run: SambaSyncRunType = strawberry_django.field()
+    samba_sync_run_list: list[SambaSyncRunType] = strawberry_django.field()

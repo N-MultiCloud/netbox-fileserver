@@ -7,7 +7,15 @@ from .models import (
     FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
+    SambaConfigFile,
+    SambaConfigSnapshot,
     SambaDomain,
+    SambaObservedGroup,
+    SambaObservedShare,
+    SambaObservedUser,
+    SambaServerState,
+    SambaSession,
+    SambaSyncRun,
 )
 
 
@@ -174,3 +182,192 @@ class DomainGroupTable(NetBoxTable):
         model = DomainGroup
         fields = ("pk", "name", "domain", "description", "actions")
         default_columns = ("name", "domain", "description")
+
+
+class SambaServerStateTable(NetBoxTable):
+    domain = tables.Column(linkify=True)
+    version = tables.Column(linkify=True)
+    testparm_ok = columns.BooleanColumn(verbose_name="Testparm")
+    observed_at = columns.DateTimeColumn(verbose_name="Observed")
+    actions = columns.ActionsColumn(actions=("edit", "delete"))
+
+    class Meta(NetBoxTable.Meta):
+        model = SambaServerState
+        fields = (
+            "pk",
+            "domain",
+            "version",
+            "smbd_active_state",
+            "nmbd_active_state",
+            "winbind_active_state",
+            "samba_ad_dc_active_state",
+            "testparm_ok",
+            "observed_at",
+            "actions",
+        )
+        default_columns = (
+            "domain",
+            "version",
+            "smbd_active_state",
+            "samba_ad_dc_active_state",
+            "testparm_ok",
+            "observed_at",
+        )
+
+
+class SambaConfigFileTable(NetBoxTable):
+    path = tables.Column(linkify=True)
+    domain = tables.Column(linkify=True)
+    is_primary = columns.BooleanColumn(verbose_name="Primary")
+    mtime = columns.DateTimeColumn()
+    fetched_at = columns.DateTimeColumn(verbose_name="Fetched")
+    actions = columns.ActionsColumn(actions=("edit", "delete"))
+
+    class Meta(NetBoxTable.Meta):
+        model = SambaConfigFile
+        fields = (
+            "pk",
+            "path",
+            "domain",
+            "sha256",
+            "size",
+            "mtime",
+            "is_primary",
+            "fetched_at",
+            "actions",
+        )
+        default_columns = (
+            "path",
+            "domain",
+            "size",
+            "mtime",
+            "is_primary",
+            "fetched_at",
+        )
+
+
+class SambaConfigSnapshotTable(NetBoxTable):
+    snapshot_id = tables.Column(linkify=True, verbose_name="Snapshot id")
+    domain = tables.Column(linkify=True)
+    created = columns.DateTimeColumn()
+    actions = columns.ActionsColumn(actions=("edit", "delete"))
+
+    class Meta(NetBoxTable.Meta):
+        model = SambaConfigSnapshot
+        fields = ("pk", "snapshot_id", "domain", "created", "actions")
+        default_columns = ("snapshot_id", "domain", "created")
+
+
+class SambaObservedShareTable(NetBoxTable):
+    name = tables.Column(linkify=True)
+    domain = tables.Column(linkify=True)
+    browseable = columns.BooleanColumn()
+    read_only = columns.BooleanColumn(verbose_name="Read only")
+    guest_ok = columns.BooleanColumn(verbose_name="Guest")
+    drift_state = columns.ChoiceFieldColumn(verbose_name="Drift")
+    actions = columns.ActionsColumn(actions=("edit", "delete"))
+
+    class Meta(NetBoxTable.Meta):
+        model = SambaObservedShare
+        fields = (
+            "pk",
+            "name",
+            "domain",
+            "path",
+            "browseable",
+            "read_only",
+            "guest_ok",
+            "drift_state",
+            "actions",
+        )
+        default_columns = (
+            "name",
+            "domain",
+            "path",
+            "browseable",
+            "read_only",
+            "guest_ok",
+            "drift_state",
+        )
+
+
+class SambaObservedUserTable(NetBoxTable):
+    username = tables.Column(linkify=True)
+    domain = tables.Column(linkify=True)
+    enabled = columns.BooleanColumn()
+    last_logon = columns.DateTimeColumn(verbose_name="Last logon")
+    actions = columns.ActionsColumn(actions=("edit", "delete"))
+
+    class Meta(NetBoxTable.Meta):
+        model = SambaObservedUser
+        fields = (
+            "pk",
+            "username",
+            "domain",
+            "sid",
+            "enabled",
+            "last_logon",
+            "actions",
+        )
+        default_columns = ("username", "domain", "sid", "enabled", "last_logon")
+
+
+class SambaObservedGroupTable(NetBoxTable):
+    name = tables.Column(linkify=True)
+    domain = tables.Column(linkify=True)
+    actions = columns.ActionsColumn(actions=("edit", "delete"))
+
+    class Meta(NetBoxTable.Meta):
+        model = SambaObservedGroup
+        fields = ("pk", "name", "domain", "sid", "members", "actions")
+        default_columns = ("name", "domain", "sid")
+
+
+class SambaSessionTable(NetBoxTable):
+    username = tables.Column(linkify=True)
+    domain = tables.Column(linkify=True)
+    opened_at = columns.DateTimeColumn(verbose_name="Opened")
+    actions = columns.ActionsColumn(actions=("edit", "delete"))
+
+    class Meta(NetBoxTable.Meta):
+        model = SambaSession
+        fields = (
+            "pk",
+            "username",
+            "domain",
+            "machine",
+            "remote_ip",
+            "share",
+            "pid",
+            "opened_at",
+            "actions",
+        )
+        default_columns = (
+            "username",
+            "domain",
+            "machine",
+            "remote_ip",
+            "share",
+            "opened_at",
+        )
+
+
+class SambaSyncRunTable(NetBoxTable):
+    started = tables.Column(linkify=True)
+    domain = tables.Column(linkify=True)
+    status = columns.ChoiceFieldColumn()
+    finished = columns.DateTimeColumn()
+    actions = columns.ActionsColumn(actions=("edit", "delete"))
+
+    class Meta(NetBoxTable.Meta):
+        model = SambaSyncRun
+        fields = (
+            "pk",
+            "started",
+            "domain",
+            "status",
+            "finished",
+            "rpc_execution_ids",
+            "actions",
+        )
+        default_columns = ("started", "domain", "status", "finished")

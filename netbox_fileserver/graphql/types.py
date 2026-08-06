@@ -6,7 +6,15 @@ from ..models import (
     FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
+    SambaConfigFile,
+    SambaConfigSnapshot,
     SambaDomain,
+    SambaObservedGroup,
+    SambaObservedShare,
+    SambaObservedUser,
+    SambaServerState,
+    SambaSession,
+    SambaSyncRun,
 )
 
 
@@ -48,4 +56,44 @@ class FileShareType:
 
 @strawberry_django.type(DomainGroup, fields="__all__")
 class DomainGroupType:
+    pass
+
+
+@strawberry_django.type(SambaServerState, fields="__all__")
+class SambaServerStateType:
+    pass
+
+
+@strawberry_django.type(SambaConfigFile, fields="__all__")
+class SambaConfigFileType:
+    pass
+
+
+@strawberry_django.type(SambaConfigSnapshot, fields="__all__")
+class SambaConfigSnapshotType:
+    pass
+
+
+@strawberry_django.type(SambaObservedShare, fields="__all__")
+class SambaObservedShareType:
+    pass
+
+
+@strawberry_django.type(SambaObservedUser, fields="__all__")
+class SambaObservedUserType:
+    pass
+
+
+@strawberry_django.type(SambaObservedGroup, fields="__all__")
+class SambaObservedGroupType:
+    pass
+
+
+@strawberry_django.type(SambaSession, fields="__all__")
+class SambaSessionType:
+    pass
+
+
+@strawberry_django.type(SambaSyncRun, fields="__all__")
+class SambaSyncRunType:
     pass

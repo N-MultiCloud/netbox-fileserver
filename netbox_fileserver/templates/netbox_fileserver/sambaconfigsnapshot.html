@@ -1,0 +1,25 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-md-5">
+    <div class="card">
+      <h2 class="card-header">Samba Config Snapshot</h2>
+      <table class="table table-hover attr-table">
+        <tr><th scope="row">Domain</th><td>{{ object.domain|linkify }}</td></tr>
+        <tr><th scope="row">Snapshot id</th><td>{{ object.snapshot_id }}</td></tr>
+        <tr><th scope="row">Created</th><td>{{ object.created }}</td></tr>
+      </table>
+    </div>
+    {% include 'inc/panels/custom_fields.html' %}
+    {% include 'inc/panels/tags.html' %}
+  </div>
+  <div class="col col-md-7">
+    <div class="card">
+      <h2 class="card-header">Archived File Set</h2>
+      <div class="card-body"><pre class="mb-0 text-wrap">{{ object.content|json }}</pre></div>
+    </div>
+  </div>
+</div>
+{% endblock content %}
