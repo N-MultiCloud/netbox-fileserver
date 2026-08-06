@@ -47,6 +47,10 @@ _NETBIOS_VALIDATOR = RegexValidator(
     regex=r"^[A-Z0-9]([A-Z0-9-]{0,13}[A-Z0-9])?$",
     message="NetBIOS name must be 1-15 uppercase alphanumeric/hyphen chars.",
 )
+_SHA256_VALIDATOR = RegexValidator(
+    regex=r"^[0-9a-fA-F]{64}$",
+    message="Enter a 64-character hexadecimal SHA-256 digest.",
+)
 # SMB share name — no path separators or reserved characters.
 _SHARE_NAME_INVALID = set('/\\:*?"<>|')
 DEFAULT_ENROLLMENT_TOKEN_TTL = timedelta(hours=24)
@@ -67,12 +71,18 @@ _SECRET_FIELD_NAMES = {
     "api secrets",
     "auth token",
     "auth tokens",
+    "authorization",
     "bearer token",
     "bearer tokens",
+    "client key",
+    "client keys",
     "client secret",
     "client secrets",
+    "ciphertext",
+    "ciphertexts",
     "credential",
     "credentials",
+    "cookie",
     "encryption key",
     "encryption keys",
     "hash",
@@ -96,7 +106,11 @@ _SECRET_FIELD_NAMES = {
     "salt",
     "salts",
     "secret",
+    "secret key",
+    "secret keys",
     "secrets",
+    "session id",
+    "session ids",
     "session key",
     "session keys",
     "ssh key",
@@ -105,9 +119,73 @@ _SECRET_FIELD_NAMES = {
     "supplemental credentials",
     "token",
     "tokens",
+    # Secret-bearing Samba/AD attributes whose names do not end in one of the
+    # generic terms above.
+    "krb5 key",
+    "krb5 keys",
+    "keytab",
+    "keytabs",
+    "pek list",
+    "pkcs12",
+    "trust auth incoming",
+    "trust auth outgoing",
+    "user pkcs12",
 }
-_PRIVATE_KEY_MARKER_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE)
+_SECRET_VALUE_QUALIFIERS = {
+    "base64",
+    "binary",
+    "blob",
+    "bytes",
+    "ciphertext",
+    "content",
+    "contents",
+    "data",
+    "encoded",
+    "encrypted",
+    "history",
+    "jwk",
+    "material",
+    "pem",
+    "raw",
+    "string",
+    "text",
+    "value",
+    "values",
+}
+_COMPACT_SECRET_FIELD_NAMES = {
+    sensitive_name.replace(" ", "") for sensitive_name in _SECRET_FIELD_NAMES
+}
+_COMPACT_SECRET_VALUE_QUALIFIERS = {
+    qualifier.replace(" ", "") for qualifier in _SECRET_VALUE_QUALIFIERS
+}
+_PRIVATE_KEY_MARKER_RE = re.compile(
+    r"-{4,5}\s*BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s*-{4,5}",
+    re.IGNORECASE,
+)
+_PUTTY_PRIVATE_KEY_RE = re.compile(r"^PuTTY-User-Key-File-\d+:", re.IGNORECASE | re.MULTILINE)
 _CREDENTIAL_URL_RE = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/:]+:[^\s/@]+@", re.IGNORECASE)
+_AUTH_SCHEME_VALUE_RE = re.compile(
+    r"^\s*(?:basic|bearer)\s+(?P<value>\S{8,})\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_CLI_SECRET_ARGUMENT_RE = re.compile(
+    r"(?:^|\s)--?(?:access[-_.]?key|api[-_.]?key|client[-_.]?secret|"
+    r"kerberos[-_.]?key|pass(?:word|wd|phrase)?|private[-_.]?key|pwd|secret|token)"
+    r"(?:=|\s+)(?P<value>\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)",
+    re.IGNORECASE,
+)
+_PASSWORD_HASH_RE = re.compile(
+    r"(?:^|[=:\s])(?:"
+    r"\$(?:1|2[aby]?|5|6|y|argon2(?:i|d|id))\$[^\s:]+|"
+    r"(?:argon2|bcrypt(?:_sha256)?|pbkdf2_(?:sha1|sha256)|scrypt)\$[^\s:]+|"
+    r"\{(?:crypt|md5|sha|sha256|sha512|smd5|ssha|ssha256|ssha512)\}[A-Za-z0-9+/=]+"
+    r")(?=$|[:\s])",
+    re.IGNORECASE | re.MULTILINE,
+)
+_PWDUMP_HASH_RE = re.compile(
+    r"^[^:\r\n]+:\d+:(?:[0-9a-f]{32}|\*{32}):(?:[0-9a-f]{32}|\*{32})(?::|$)",
+    re.IGNORECASE | re.MULTILINE,
+)
 # Splits camelCase/acronym-run names (sambaNTPassword, unicodePwd) into words
 # before normalization, so the secret-name denylist above matches directory
 # attribute names as well as underscore/space-separated ones.
@@ -123,13 +201,24 @@ def _normalized_sensitive_name(value: object) -> str:
     text = str(value).strip()
     text = _CAMEL_BOUNDARY_RE.sub(" ", text)
     text = _ACRONYM_BOUNDARY_RE.sub(" ", text)
-    return re.sub(r"[_\s-]+", " ", text.lower())
+    # Flatten dotted/bracketed/slashed paths as well as the usual separators:
+    # ``auth.password``, ``user[unicodePwd]``, and ``auth/password`` must be
+    # treated exactly like nested dictionaries with a sensitive terminal key.
+    return re.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()
 
 
 def _is_sensitive_name(value: object) -> bool:
     name = _normalized_sensitive_name(value)
-    return name in _SECRET_FIELD_NAMES or any(
-        name.endswith(f" {suffix}") for suffix in _SECRET_FIELD_NAMES
+    compact_name = name.replace(" ", "")
+    if any(
+        compact_name.endswith(sensitive_name)
+        for sensitive_name in _COMPACT_SECRET_FIELD_NAMES
+    ):
+        return True
+    return any(
+        compact_name.endswith(f"{sensitive_name}{qualifier}")
+        for sensitive_name in _COMPACT_SECRET_FIELD_NAMES
+        for qualifier in _COMPACT_SECRET_VALUE_QUALIFIERS
     )
 
 
@@ -147,6 +236,18 @@ def _is_redacted(value: object) -> bool:
 def validate_no_secret_material(value: object, *, field_name: str) -> None:
     """Reject credential-bearing structured data or text before persistence."""
     if isinstance(value, dict):
+        normalized_keys = {_normalized_sensitive_name(key): nested for key, nested in value.items()}
+        key_type = str(normalized_keys.get("kty", "")).strip().casefold()
+        private_jwk_fields = (
+            {"d", "p", "q", "dp", "dq", "qi", "oth"}
+            if key_type in {"ec", "okp", "rsa"}
+            else {"k"} if key_type == "oct" else set()
+        )
+        if any(
+            key in normalized_keys and not _is_redacted(normalized_keys[key])
+            for key in private_jwk_fields
+        ):
+            raise ValidationError({field_name: "Private JSON Web Keys are not permitted."})
         for key, nested_value in value.items():
             if _is_sensitive_name(key) and not _is_redacted(nested_value):
                 raise ValidationError(
@@ -160,20 +261,40 @@ def validate_no_secret_material(value: object, *, field_name: str) -> None:
         return
     if not isinstance(value, str) or _is_redacted(value):
         return
-    if _PRIVATE_KEY_MARKER_RE.search(value) or _CREDENTIAL_URL_RE.search(value):
+    if (
+        _PRIVATE_KEY_MARKER_RE.search(value)
+        or _PUTTY_PRIVATE_KEY_RE.search(value)
+        or _CREDENTIAL_URL_RE.search(value)
+    ):
         raise ValidationError({field_name: "Private keys and inline credentials are not permitted."})
+    if _PASSWORD_HASH_RE.search(value) or _PWDUMP_HASH_RE.search(value):
+        raise ValidationError({field_name: "Password hashes are not permitted."})
+    for match in _AUTH_SCHEME_VALUE_RE.finditer(value):
+        if not _is_redacted(match.group("value")):
+            raise ValidationError({field_name: "Authorization credentials are not permitted."})
+    for match in _CLI_SECRET_ARGUMENT_RE.finditer(value):
+        candidate = match.group("value").strip("\"'")
+        if not _is_redacted(candidate):
+            raise ValidationError({field_name: "Command-line credentials are not permitted."})
     for line in value.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith(("#", ";")):
             continue
-        separator = "=" if "=" in stripped else ":" if ":" in stripped else None
-        if separator is None:
-            continue
-        key, candidate = stripped.split(separator, 1)
-        if _is_sensitive_name(key) and not _is_redacted(candidate):
-            raise ValidationError(
-                {field_name: f"Secret-bearing assignment {key.strip()!r} is not permitted."}
-            )
+        # Check both separators. Choosing only one lets an '=' inside an
+        # Authorization/Cookie value mask the earlier ':' header separator;
+        # checking only ':' would in turn miss URL query parameters.
+        for separator in ("=", ":"):
+            if separator not in stripped:
+                continue
+            key, candidate = stripped.split(separator, 1)
+            if _is_sensitive_name(key) and not _is_redacted(candidate):
+                raise ValidationError(
+                    {
+                        field_name: (
+                            f"Secret-bearing assignment {key.strip()!r} is not permitted."
+                        )
+                    }
+                )
 
 
 def _validate_secret_free_fields(instance: models.Model, *field_names: str) -> None:
@@ -187,6 +308,27 @@ def _validate_secret_free_fields(instance: models.Model, *field_names: str) -> N
     """
     for field_name in (*field_names, "custom_field_data"):
         validate_no_secret_material(getattr(instance, field_name, None), field_name=field_name)
+
+
+def _validate_json_container(
+    value: object,
+    *,
+    field_name: str,
+    expected_type: type[dict] | type[list],
+) -> None:
+    """Enforce the documented container shape for observed JSON fields."""
+    if not isinstance(value, expected_type):
+        raise ValidationError(
+            {field_name: f"{field_name} must be a JSON {expected_type.__name__}."}
+        )
+
+
+def _validate_positive_integer_list(value: list[object], *, field_name: str) -> None:
+    """Reject non-RPC identifiers, including booleans and opaque token strings."""
+    if any(type(item) is not int or item <= 0 for item in value):
+        raise ValidationError(
+            {field_name: f"{field_name} must contain only positive integer IDs."}
+        )
 
 
 class FileServerDeployment(NetBoxModel):
@@ -781,7 +923,11 @@ class SambaServerState(NetBoxModel):
     samba_ad_dc_active_state = models.CharField(max_length=30, blank=True)
     samba_ad_dc_sub_state = models.CharField(max_length=30, blank=True)
     samba_ad_dc_unit_file_state = models.CharField(max_length=30, blank=True)
-    config_sha256 = models.CharField(max_length=64, blank=True)
+    config_sha256 = models.CharField(
+        max_length=64,
+        blank=True,
+        validators=[_SHA256_VALIDATOR],
+    )
     testparm_ok = models.BooleanField(default=False)
     observed_at = models.DateTimeField()
 
@@ -795,7 +941,23 @@ class SambaServerState(NetBoxModel):
 
     def clean(self) -> None:
         super().clean()
-        _validate_secret_free_fields(self)
+        _validate_secret_free_fields(
+            self,
+            "version",
+            "smbd_active_state",
+            "smbd_sub_state",
+            "smbd_unit_file_state",
+            "nmbd_active_state",
+            "nmbd_sub_state",
+            "nmbd_unit_file_state",
+            "winbind_active_state",
+            "winbind_sub_state",
+            "winbind_unit_file_state",
+            "samba_ad_dc_active_state",
+            "samba_ad_dc_sub_state",
+            "samba_ad_dc_unit_file_state",
+            "config_sha256",
+        )
 
 
 class SambaConfigFile(NetBoxModel):
@@ -808,7 +970,7 @@ class SambaConfigFile(NetBoxModel):
     )
     path = models.CharField(max_length=255)
     content = models.TextField(blank=True)
-    sha256 = models.CharField(max_length=64)
+    sha256 = models.CharField(max_length=64, validators=[_SHA256_VALIDATOR])
     size = models.PositiveBigIntegerField()
     mtime = models.DateTimeField()
     is_primary = models.BooleanField(default=False)
@@ -850,6 +1012,11 @@ class SambaConfigSnapshot(NetBoxModel):
 
     def clean(self) -> None:
         super().clean()
+        _validate_json_container(
+            self.content,
+            field_name="content",
+            expected_type=dict,
+        )
         _validate_secret_free_fields(self, "snapshot_id", "content")
 
 
@@ -887,6 +1054,11 @@ class SambaObservedShare(NetBoxModel):
 
     def clean(self) -> None:
         super().clean()
+        _validate_json_container(
+            self.raw_params,
+            field_name="raw_params",
+            expected_type=dict,
+        )
         _validate_secret_free_fields(self, "name", "path", "raw_params")
 
 
@@ -940,6 +1112,11 @@ class SambaObservedGroup(NetBoxModel):
 
     def clean(self) -> None:
         super().clean()
+        _validate_json_container(
+            self.members,
+            field_name="members",
+            expected_type=list,
+        )
         _validate_secret_free_fields(self, "name", "sid", "members")
 
 
@@ -1002,4 +1179,13 @@ class SambaSyncRun(NetBoxModel):
 
     def clean(self) -> None:
         super().clean()
+        _validate_json_container(
+            self.rpc_execution_ids,
+            field_name="rpc_execution_ids",
+            expected_type=list,
+        )
+        _validate_positive_integer_list(
+            self.rpc_execution_ids,
+            field_name="rpc_execution_ids",
+        )
         _validate_secret_free_fields(self, "rpc_execution_ids", "error_message")

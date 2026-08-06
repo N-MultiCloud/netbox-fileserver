@@ -50,6 +50,8 @@ reconciliation trigger.
 4. **Observed Samba rows are reconciler-owned.** Their fields are writable over
    the API for reconciliation but are absent from operator create/edit and
    bulk-edit forms (only NetBox tags remain editable in those forms).
+5. **GraphQL honors NetBox object permissions.** Every plugin model type extends
+   `NetBoxObjectType`, which restricts querysets to objects the caller may view.
 
 ## REST API
 

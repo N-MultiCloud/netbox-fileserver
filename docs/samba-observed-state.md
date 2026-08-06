@@ -15,8 +15,8 @@ therefore supports NetBox tags, custom fields, journaling, and change logging.
 
 | Model | Cardinality and contents |
 |---|---|
-| `SambaServerState` | One-to-one per domain: Samba version; active, sub, and unit-file state for `smbd`, `nmbd`, `winbind`, and `samba-ad-dc`; config SHA-256; `testparm_ok`; `observed_at`. |
-| `SambaConfigFile` | Many per domain: path, sanitized content, SHA-256, byte size, mtime, primary marker, and fetch time. Domain + path is unique. |
+| `SambaServerState` | One-to-one per domain: Samba version; active, sub, and unit-file state for `smbd`, `nmbd`, `winbind`, and `samba-ad-dc`; validated config SHA-256; `testparm_ok`; `observed_at`. |
+| `SambaConfigFile` | Many per domain: path, sanitized content, validated SHA-256, byte size, mtime, primary marker, and fetch time. Domain + path is unique. |
 | `SambaConfigSnapshot` | Many per domain: a unique snapshot identifier and JSON archive of a sanitized config file set. The inherited `created` timestamp records capture time. |
 | `SambaObservedShare` | Many per domain: name, path, sanitized raw parameters, access flags, and desired-vs-observed drift state. Domain + name is unique. |
 | `SambaObservedUser` | Many per domain: username, SID, enabled state, and last logon only. Domain + username is unique. |
@@ -45,7 +45,9 @@ Each collection has the normal NetBox list, retrieve, create, update, partial
 update, and delete surface. The GraphQL schema exposes singular and list queries
 for each model. Reconciler service identities still need the corresponding
 NetBox object permissions; membership in `File Server Reconcilers` does not by
-itself bypass NetBox authorization.
+itself bypass NetBox authorization. All plugin GraphQL types inherit
+`NetBoxObjectType`, whose restricted queryset enforces the caller's object-level
+view permissions.
 
 ## UI and search
 
@@ -66,9 +68,14 @@ surfaces as well.
 `SambaObservedUser` stores exactly `domain`, `username`, `sid`, `enabled`, and
 `last_logon`. It has no password, NT/LM hash, credential, secret, key, or
 ciphertext field. The observed serializers reject recognizable secret-bearing
-keys, assignments, inline-credential URLs, and private-key blocks in structured
-or text payloads. Model validation provides the same guard for config content,
-raw share parameters, and sync error text.
+keys (including camelCase, dotted, bracketed, slashed, and value/history
+variants), assignments, authorization headers, command-line credentials,
+inline-credential URLs, password-hash formats/dumps, private JWKs, and PEM,
+SSH2, PGP, or PuTTY private-key material. Model validation provides the same
+guard for config content, raw share parameters, and sync error text. JSON
+containers are also shape-checked: snapshots and raw share parameters are
+objects, while group members and RPC execution IDs are lists. RPC execution IDs
+must be positive integers, matching the `netbox-rpc` primary-key contract.
 
 The collector must redact secrets before sending a payload. Raw passwords,
 hashes, keys, tokens, and credentials must never be accepted as observed-state

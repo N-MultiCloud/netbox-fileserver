@@ -36,6 +36,10 @@ NetBox 4.5.8 and 4.6.x while the plugin advertises 4.5 compatibility.
 5. Keep migrations consistent with `models.py`; observed-state changes belong
    after leaf `0002_fileserverenrollmenttoken` in
    `0003_samba_observed_state.py`.
+6. Every plugin GraphQL model type must inherit
+   `netbox.graphql.types.NetBoxObjectType`; its `get_queryset()` hook applies
+   NetBox object-level view restrictions. Plain Strawberry types bypass that
+   permission boundary.
 
 ## File Map
 

@@ -213,6 +213,17 @@ def _class_node(rel: str, class_name: str) -> ast.ClassDef:
     )
 
 
+def _literal_assignment(rel: str, name: str):
+    tree = ast.parse(read(rel))
+    assignment = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+    )
+    return ast.literal_eval(assignment.value)
+
+
 def _form_meta_fields(class_name: str) -> tuple[str, ...]:
     form_class = _class_node("forms.py", class_name)
     meta_class = next(
@@ -386,12 +397,32 @@ def test_observed_payloads_reject_embedded_secret_material():
     serializers_src = read("api/serializers.py")
     assert "def validate_no_secret_material(" in models_src
     assert "_PRIVATE_KEY_MARKER_RE" in models_src
+    assert "_PUTTY_PRIVATE_KEY_RE" in models_src
     assert "_CREDENTIAL_URL_RE" in models_src
+    assert "_AUTH_SCHEME_VALUE_RE" in models_src
+    assert "_CLI_SECRET_ARGUMENT_RE" in models_src
+    assert "_PASSWORD_HASH_RE" in models_src
+    assert "_PWDUMP_HASH_RE" in models_src
     assert "class SecretSafeObservedSerializerMixin:" in serializers_src
     assert '"custom_fields", "custom_field_data"' in serializers_src
 
     guarded_fields = {
-        "SambaServerState": {"version", "config_sha256"},
+        "SambaServerState": {
+            "version",
+            "smbd_active_state",
+            "smbd_sub_state",
+            "smbd_unit_file_state",
+            "nmbd_active_state",
+            "nmbd_sub_state",
+            "nmbd_unit_file_state",
+            "winbind_active_state",
+            "winbind_sub_state",
+            "winbind_unit_file_state",
+            "samba_ad_dc_active_state",
+            "samba_ad_dc_sub_state",
+            "samba_ad_dc_unit_file_state",
+            "config_sha256",
+        },
         "SambaConfigFile": {"path", "content"},
         "SambaConfigSnapshot": {"snapshot_id", "content"},
         "SambaObservedShare": {"name", "path", "raw_params"},
@@ -416,6 +447,58 @@ def test_observed_payloads_reject_embedded_secret_material():
             )
         )
         assert required_fields <= set(ast.literal_eval(field_assignment.value)), model_name
+
+        model_class = _class_node("models.py", model_name)
+        clean_method = next(
+            node
+            for node in model_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == "clean"
+        )
+        guard_call = next(
+            node
+            for node in ast.walk(clean_method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_validate_secret_free_fields"
+        )
+        model_guarded_fields = {
+            ast.literal_eval(argument)
+            for argument in guard_call.args[1:]
+            if isinstance(argument, ast.Constant)
+        }
+        assert required_fields <= model_guarded_fields, model_name
+
+
+def test_secret_name_detection_covers_flattened_and_qualified_credentials():
+    src = read("models.py")
+    secret_names = _literal_assignment("models.py", "_SECRET_FIELD_NAMES")
+    qualifiers = _literal_assignment("models.py", "_SECRET_VALUE_QUALIFIERS")
+
+    assert 're.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()' in src
+    assert {
+        "authorization",
+        "client key",
+        "cookie",
+        "krb5 key",
+        "keytab",
+        "pkcs12",
+        "session id",
+        "trust auth incoming",
+        "trust auth outgoing",
+    } <= secret_names
+    assert {"binary", "ciphertext", "data", "history", "material", "value"} <= qualifiers
+    assert 'key_type in {"ec", "okp", "rsa"}' in src
+    assert 'for separator in ("=", ":"):' in src
+
+
+def test_observed_json_fields_enforce_their_documented_container_shapes():
+    src = read("models.py")
+    assert src.count("_validate_json_container(") == 5  # helper + four call sites
+    for field_name in ("content", "raw_params", "members", "rpc_execution_ids"):
+        assert f'self.{field_name},\n            field_name="{field_name}"' in src
+    assert "def _validate_positive_integer_list(" in src
+    assert "type(item) is not int or item <= 0" in src
+    assert "_validate_positive_integer_list(\n            self.rpc_execution_ids," in src
 
 
 # ─────────────────────────────── Choices ──────────────────────────────
@@ -553,6 +636,31 @@ def test_samba_observed_migration_is_leaf_scoped_and_model_synced():
     assert src.count("models.OneToOneField(") == 1
     assert src.count("models.ForeignKey(") == 7
     assert src.count("migrations.CreateModel(") == 8
+
+
+def test_observed_sha256_fields_are_validated_in_models_and_migration():
+    models_src = read("models.py")
+    migration_src = read("migrations/0003_samba_observed_state.py")
+
+    assert 'regex=r"^[0-9a-fA-F]{64}$"' in models_src
+    assert models_src.count("validators=[_SHA256_VALIDATOR]") == 2
+    assert migration_src.count("django.core.validators.RegexValidator(") == 2
+    assert migration_src.count('regex="^[0-9a-fA-F]{64}$"') == 2
+
+
+def test_observed_choice_fields_are_inlined_in_the_migration():
+    migration_src = read("migrations/0003_samba_observed_state.py")
+    for value, label in (
+        ("in_sync", "In sync"),
+        ("drifted", "Drifted"),
+        ("missing_on_host", "Missing on host"),
+        ("unmanaged", "Unmanaged"),
+        ("running", "Running"),
+        ("succeeded", "Succeeded"),
+        ("partial", "Partial"),
+        ("failed", "Failed"),
+    ):
+        assert f'("{value}", "{label}")' in migration_src
 
 
 # ────────────────────────── Wiring / registration ─────────────────────
@@ -719,6 +827,22 @@ def test_serializers_keep_observed_fields_writable():
                 assert field not in line, f"{field} must stay writable"
 
 
+def test_every_api_viewset_wires_its_filterset():
+    for cls, _name, _slug in MODELS:
+        viewset = _class_node("api/views.py", f"{cls}ViewSet")
+        assignment = next(
+            node
+            for node in viewset.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "filterset_class"
+                for target in node.targets
+            )
+        )
+        assert isinstance(assignment.value, ast.Name)
+        assert assignment.value.id == f"{cls}FilterSet"
+
+
 def test_deployment_status_transitions_are_guarded():
     models_src = read("models.py")
     forms_src = read("forms.py")
@@ -784,6 +908,17 @@ def test_enrollment_token_hash_is_not_exposed_by_public_surfaces():
     assert "PasswordInput(render_value=False)" in forms_src
 
 
+def test_graphql_types_enforce_netbox_object_permissions():
+    src = read("graphql/types.py")
+    assert "from netbox.graphql.types import NetBoxObjectType" in src
+    for cls, _name, _slug in MODELS:
+        type_class = _class_node("graphql/types.py", f"{cls}Type")
+        assert any(
+            isinstance(base, ast.Name) and base.id == "NetBoxObjectType"
+            for base in type_class.bases
+        ), cls
+
+
 def test_bulk_edit_is_wired_for_all_models():
     forms_src = read("forms.py")
     views_src = read("views.py")
@@ -827,7 +962,7 @@ def test_every_model_has_the_full_plugin_surface():
         assert f"class {cls}Form(" in forms_src, cls
         assert f"class {cls}BulkEditForm(" in forms_src, cls
         assert f"class {cls}Table(" in tables, cls
-        assert f"class {cls}Type:" in graphql_types, cls
+        assert f"class {cls}Type(NetBoxObjectType):" in graphql_types, cls
         query_name = query_names[cls]
         assert f"{query_name}: {cls}Type" in graphql_schema, cls
         assert f"{query_name}_list: list[{cls}Type]" in graphql_schema, cls
@@ -855,3 +990,5 @@ def test_navigation_and_urls_cover_every_model():
         assert name in nav, f"{name} missing from navigation"
         assert name in urls, f"{name} missing from urls"
         assert f'"{slug}"' in urls, f"{slug} slug missing from urls"
+
+    assert urls.count("        include_add=False,") == len(SAMBA_OBSERVED_MODEL_FIELDS)

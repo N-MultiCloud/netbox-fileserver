@@ -1,3 +1,4 @@
+import django.core.validators
 import django.db.models.deletion
 import django.utils.timezone
 import netbox.models.deletion
@@ -29,7 +30,18 @@ class Migration(migrations.Migration):
                 ),
                 ("path", models.CharField(max_length=255)),
                 ("content", models.TextField(blank=True)),
-                ("sha256", models.CharField(max_length=64)),
+                (
+                    "sha256",
+                    models.CharField(
+                        max_length=64,
+                        validators=[
+                            django.core.validators.RegexValidator(
+                                message="Enter a 64-character hexadecimal SHA-256 digest.",
+                                regex="^[0-9a-fA-F]{64}$",
+                            )
+                        ],
+                    ),
+                ),
                 ("size", models.PositiveBigIntegerField()),
                 ("mtime", models.DateTimeField()),
                 ("is_primary", models.BooleanField(default=False)),
@@ -153,7 +165,19 @@ class Migration(migrations.Migration):
                 ("browseable", models.BooleanField(default=True)),
                 ("read_only", models.BooleanField(default=True)),
                 ("guest_ok", models.BooleanField(default=False)),
-                ("drift_state", models.CharField(default="unmanaged", max_length=30)),
+                (
+                    "drift_state",
+                    models.CharField(
+                        choices=[
+                            ("in_sync", "In sync"),
+                            ("drifted", "Drifted"),
+                            ("missing_on_host", "Missing on host"),
+                            ("unmanaged", "Unmanaged"),
+                        ],
+                        default="unmanaged",
+                        max_length=30,
+                    ),
+                ),
                 (
                     "domain",
                     models.ForeignKey(
@@ -249,7 +273,19 @@ class Migration(migrations.Migration):
                     "samba_ad_dc_unit_file_state",
                     models.CharField(blank=True, max_length=30),
                 ),
-                ("config_sha256", models.CharField(blank=True, max_length=64)),
+                (
+                    "config_sha256",
+                    models.CharField(
+                        blank=True,
+                        max_length=64,
+                        validators=[
+                            django.core.validators.RegexValidator(
+                                message="Enter a 64-character hexadecimal SHA-256 digest.",
+                                regex="^[0-9a-fA-F]{64}$",
+                            )
+                        ],
+                    ),
+                ),
                 ("testparm_ok", models.BooleanField(default=False)),
                 ("observed_at", models.DateTimeField()),
                 (
@@ -330,7 +366,19 @@ class Migration(migrations.Migration):
                 ),
                 ("started", models.DateTimeField(default=django.utils.timezone.now)),
                 ("finished", models.DateTimeField(blank=True, null=True)),
-                ("status", models.CharField(default="running", max_length=30)),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("running", "Running"),
+                            ("succeeded", "Succeeded"),
+                            ("partial", "Partial"),
+                            ("failed", "Failed"),
+                        ],
+                        default="running",
+                        max_length=30,
+                    ),
+                ),
                 ("rpc_execution_ids", models.JSONField(blank=True, default=list)),
                 ("error_message", models.TextField(blank=True)),
                 (

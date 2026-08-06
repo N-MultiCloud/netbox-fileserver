@@ -94,6 +94,10 @@ define this integration surface are vendored at
    validators are inlined to keep `makemigrations` clean). Samba observed-state
    models live in `0003_samba_observed_state.py`, depending only on plugin leaf
    `0002_fileserverenrollmenttoken`.
+6. Every plugin GraphQL model type must inherit
+   `netbox.graphql.types.NetBoxObjectType`. Its `get_queryset()` implementation
+   calls `queryset.restrict(user, "view")`; a plain Strawberry type silently
+   bypasses NetBox object-level permissions.
 
 ## NMS stack integration
 
