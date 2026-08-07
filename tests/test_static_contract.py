@@ -22,6 +22,8 @@ MODEL_FILES = (
     "navigation.py",
     "search.py",
     "template_content.py",
+    "jobs.py",
+    "samba_sync.py",
     "api/serializers.py",
     "api/views.py",
     "api/urls.py",
@@ -73,9 +75,10 @@ def test_plugin_config_name_and_base_url():
     assert 'base_url = "fileserver"' in src
 
 
-def test_plugin_requires_netbox_nms():
+def test_plugin_requires_netbox_nms_and_rpc():
     src = read("__init__.py")
-    assert 'required_plugins = ["netbox_nms"]' in src
+    assert 'required_plugins = ["netbox_nms", "netbox_rpc"]' in src
+    assert "from . import jobs" in src
 
 
 def test_plugin_version_bounds():
@@ -582,6 +585,69 @@ def test_api_actions_cover_enrollment_consume_and_deployment_approve():
     assert "FileServerAgentEnrollSerializer" in src
 
 
+def test_samba_sync_action_is_permission_gated_and_enqueues_rq_job():
+    api_src = read("api/views.py")
+    jobs_src = read("jobs.py")
+    sync_src = read("samba_sync.py")
+
+    assert '@action(detail=True, methods=["post"], url_path="sync")' in api_src
+    assert 'SambaDomain.objects.restrict(request.user, "change")' in api_src
+    assert '"netbox_rpc.execute_rpcintent"' in api_src
+    assert '"netbox_rpc.execute_rpcprocedure"' in api_src
+    assert "SambaSyncJob.enqueue(" in api_src
+    assert "HTTP_202_ACCEPTED" in api_src
+    assert "class SambaSyncJob(JobRunner):" in jobs_src
+    assert "perform_samba_sync(" in jobs_src
+    assert "def dispatch_collect_state(" in sync_src
+    assert "def await_executions(" in sync_src
+    assert "def fold_result(" in sync_src
+
+
+def test_samba_sync_rejects_when_worker_capacity_is_insufficient():
+    api_src = read("api/views.py")
+    jobs_src = read("jobs.py")
+    assert "def registered_worker_count(" in jobs_src
+    assert "MIN_SAMBA_SYNC_WORKERS" in jobs_src
+    assert "registered_worker_count(SAMBA_SYNC_QUEUE_NAME)" in api_src
+    assert "worker_count < MIN_SAMBA_SYNC_WORKERS" in api_src
+    assert "HTTP_503_SERVICE_UNAVAILABLE" in api_src
+
+
+def test_samba_sync_enqueues_and_links_job_inside_the_same_transaction():
+    api_src = read("api/views.py")
+    # The run's job FK must be set before the enclosing atomic() block
+    # closes, so RQ's transaction.on_commit()-deferred dispatch can never
+    # fire before the row that links the job to its sync run is durably
+    # committed.
+    with_index = api_src.index("with transaction.atomic():")
+    enqueue_index = api_src.index("SambaSyncJob.enqueue(")
+    link_index = api_src.index('sync_run.job_id = job_pk')
+    block_close_index = api_src.index("if enqueue_failed:")
+    assert with_index < enqueue_index < link_index < block_close_index
+
+
+def test_samba_sync_uses_rpc_intent_and_dotted_procedure_constants_only():
+    src = read("samba_sync.py")
+    assert "from netbox_rpc.constants import (" in src
+    assert "FILESERVER_SAMBA_COLLECT_STATE" in src
+    assert "execute_intent(" in src
+    assert "assigned_object_type=assigned_type" in src
+    assert "service.samba_1" not in src
+    assert "http://" not in src and "https://" not in src
+    assert "ssh" not in src.casefold()
+
+
+def test_samba_sync_redacts_config_and_fail_closes_collection_replacement():
+    src = read("samba_sync.py")
+    assert "def redact_secret_material(" in src
+    assert 'validator(redacted, field_name="content")' in src
+    assert "_UNSAFE_CONTENT_REDACTION" in src
+    assert "def replacement_plan(" in src
+    assert '"shares": succeeded >= SHARE_STATE_PROCEDURES' in src
+    assert '"users": SAMBA_1_USER_LIST in succeeded' in src
+    assert '"groups": SAMBA_1_GROUP_LIST in succeeded' in src
+
+
 # ────────────────────────────── Migration ─────────────────────────────
 
 
@@ -650,8 +716,14 @@ def test_samba_observed_migration_is_leaf_scoped_and_model_synced():
         "custom_field_data": "JSONField",
         "tags": "TaggableManager",
     }
+    # SambaSyncRun.job was added by the later, non-leaf 0004 migration (see
+    # test_sambasyncrun_job_migration_matches_the_model below), so this leaf
+    # migration's frozen CreateModel state predates it.
+    fields_added_after_this_migration = {"SambaSyncRun": {"job"}}
     for model_name in SAMBA_OBSERVED_MODEL_FIELDS:
         expected = inherited_fields | _model_field_types(model_name)
+        for later_field in fields_added_after_this_migration.get(model_name, ()):
+            expected.pop(later_field, None)
         assert migration_models[model_name] == expected, model_name
 
     assert src.count("on_delete=django.db.models.deletion.CASCADE") == 8
@@ -659,6 +731,39 @@ def test_samba_observed_migration_is_leaf_scoped_and_model_synced():
     assert src.count("models.OneToOneField(") == 1
     assert src.count("models.ForeignKey(") == 7
     assert src.count("migrations.CreateModel(") == 8
+
+
+def test_sambasyncrun_job_migration_matches_the_model():
+    path = PKG / "migrations" / "0004_sambasyncrun_job.py"
+    src = path.read_text(encoding="utf-8")
+    tree = ast.parse(src, filename=str(path))
+    migration_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "Migration"
+    )
+    dependencies = next(
+        node
+        for node in migration_class.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "dependencies"
+            for target in node.targets
+        )
+    )
+    assert ast.literal_eval(dependencies.value) == [
+        ("netbox_fileserver", "0003_samba_observed_state"),
+        ("core", "0011_move_objectchange"),
+    ]
+    assert src.count("migrations.AddField(") == 1
+    assert 'model_name="sambasyncrun"' in src
+    assert 'name="job"' in src
+    assert "models.ForeignKey(" in src
+    assert "on_delete=django.db.models.deletion.SET_NULL" in src
+    assert 'to="core.job"' in src
+    assert "null=True" in src
+    assert "blank=True" in src
+    assert _model_field_types("SambaSyncRun")["job"] == "ForeignKey"
 
 
 def test_observed_sha256_fields_are_validated_in_models_and_migration():
@@ -800,6 +905,7 @@ SAMBA_OBSERVED_MODEL_FIELDS = {
         "started",
         "finished",
         "status",
+        "job",
         "rpc_execution_ids",
         "error_message",
     ),

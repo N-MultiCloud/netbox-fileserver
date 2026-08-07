@@ -39,6 +39,7 @@ CORE_APPS = {
 # migration's ``replaces`` list).
 ALLOWED_CORE_DEPENDENCIES = frozenset(
     {
+        "core.0011_move_objectchange",
         "extras.0134_owner",
         "ipam.0086_gfk_indexes",
         "tenancy.0023_add_mptt_tree_indexes",

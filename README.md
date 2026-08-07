@@ -6,6 +6,8 @@ NetBox plugin that models the N-MultiCloud **File Server product** — a managed
 NetBox's PostgreSQL database is the source of truth for the infrastructure
 objects; an external **NMS file-server backend** reconciles
 Proxmox/Samba/Nextcloud to match and refreshes the observed-state inventory.
+Samba collection is dispatched exclusively through the audited `netbox-rpc`
+intent/execution ledger; this plugin never connects to a managed host directly.
 
 This is the same pattern as `netbox-proxbox`, one layer up the stack:
 
@@ -66,6 +68,8 @@ Endpoints are served at `/api/plugins/fileserver/`:
   used by the reconciler to validate an agent enrollment payload and atomically
   mark a token as used.
 - `samba-domains/`
+- `samba-domains/{id}/sync/` — permission-gated POST action that creates a
+  `SambaSyncRun` and queues the RPC collect/fold job.
 - `nextcloud-instances/`
 - `shares/`
 - `domain-groups/`
@@ -83,6 +87,14 @@ fields back. Deployment `status` is writable only for the `File Server
 Reconcilers` service-account group; tenant/admin approval uses
 `deployments/{id}/approve/`.
 
+The Samba sync action requires object-level change access to the domain,
+staff/tenant-admin or `File Server Reconcilers` membership, and the
+`netbox_rpc.execute_rpcintent` plus `netbox_rpc.execute_rpcprocedure`
+permissions. The job invokes the seeded `fileserver.samba.collect_state`
+intent, waits up to five minutes, folds only successful results, and reports
+failed or timed-out children as a `partial`/`failed` `SambaSyncRun` without
+blanking their last-known state.
+
 See [docs/enrollment.md](docs/enrollment.md) for the enrollment token and
 pending-approval lifecycle contract. See
 [docs/samba-observed-state.md](docs/samba-observed-state.md) for the observed
@@ -93,6 +105,10 @@ model, API, UI, GraphQL, search, and write-ownership contract.
 - NetBox 4.5.8 – 4.6.99
 - Python ≥ 3.12
 - `netbox-nms` ≥ 0.1.8, < 0.2.0 (provides the `NMSBackend` connection registry; older releases cannot migrate on NetBox 4.5.x)
+- `netbox-rpc` ≥ 0.1.7, < 0.2.0 (provides the seeded Samba intents, audited
+  execution ledger, and RQ procedure jobs; `FILESERVER_SAMBA_COLLECT_STATE`
+  and `execute_intent()` do not exist at the 0.1.6 tag — see
+  N-MultiCloud/netbox-rpc#219)
 
 Migrations depend only on NetBox core migration nodes present in both NetBox
 4.5.8 and 4.6.x so the plugin can build its migration graph across the
@@ -102,7 +118,7 @@ advertised compatibility window.
 
 ```bash
 pip install -e ./netbox-fileserver          # into the NetBox venv
-# configuration.py → PLUGINS = ["netbox_nms", "netbox_fileserver"]
+# configuration.py → PLUGINS = ["netbox_nms", "netbox_rpc", "netbox_fileserver"]
 python manage.py migrate netbox_fileserver
 ```
 

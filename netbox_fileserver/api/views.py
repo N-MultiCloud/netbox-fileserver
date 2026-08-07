@@ -1,5 +1,8 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
+from django.utils import timezone
 from netbox.api.viewsets import NetBoxModelViewSet
+from rest_framework import status as http_status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.generics import get_object_or_404
@@ -195,6 +198,156 @@ class SambaDomainViewSet(NetBoxModelViewSet):
     ).prefetch_related("tags")
     serializer_class = SambaDomainSerializer
     filterset_class = SambaDomainFilterSet
+
+    @action(detail=True, methods=["post"], url_path="sync")
+    def sync(self, request, pk=None):
+        queryset = (
+            SambaDomain.objects.restrict(request.user, "change")
+            .select_related("deployment__tenant", "dc_vm", "dc_ip")
+            .prefetch_related("tags")
+        )
+        domain = get_object_or_404(queryset, pk=pk)
+        if not (
+            _is_tenant_admin(request.user, domain.deployment.tenant)
+            or _is_reconciler_service_account(request.user)
+        ):
+            raise PermissionDenied(
+                "Staff, a tenant admin, or a File Server Reconciler is required."
+            )
+        for permission in (
+            "netbox_rpc.execute_rpcintent",
+            "netbox_rpc.execute_rpcprocedure",
+        ):
+            if not request.user.has_perm(permission):
+                raise PermissionDenied(f"{permission} permission is required.")
+
+        from ..jobs import (
+            MIN_SAMBA_SYNC_WORKERS,
+            SAMBA_SYNC_JOB_TIMEOUT,
+            SAMBA_SYNC_QUEUE_NAME,
+            registered_worker_count,
+        )
+        from ..samba_sync import _finish_sync_run, is_sync_run_stale
+
+        worker_count = registered_worker_count(SAMBA_SYNC_QUEUE_NAME)
+        if worker_count < MIN_SAMBA_SYNC_WORKERS:
+            # The dispatching SambaSyncJob holds one worker for its whole
+            # poll loop; with fewer than MIN_SAMBA_SYNC_WORKERS registered,
+            # no worker is ever free to run a single child RPC execution, so
+            # every sync is guaranteed to time out rather than merely queue
+            # behind other work. Reject fast instead of burning
+            # SAMBA_SYNC_JOB_TIMEOUT seconds of worker time on a sync that
+            # cannot possibly finish.
+            return Response(
+                {
+                    "detail": (
+                        f"Samba sync requires at least {MIN_SAMBA_SYNC_WORKERS} "
+                        f"RQ workers registered on the '{SAMBA_SYNC_QUEUE_NAME}' "
+                        "queue (one to dispatch the sync, at least one more to "
+                        f"run its child RPC executions); only {worker_count} "
+                        "are currently registered."
+                    ),
+                },
+                status=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        with transaction.atomic():
+            locked_domain = SambaDomain.objects.select_for_update().get(pk=domain.pk)
+            running = (
+                SambaSyncRun.objects.select_for_update()
+                .select_related("job")
+                .filter(domain=locked_domain, status="running")
+                .first()
+            )
+            if running is not None:
+                # The NetBox core.Job linked to the run -- not the row's own
+                # wall-clock age -- is the source of truth for whether it is
+                # genuinely stuck: Job.started is only stamped once RQ
+                # execution actually begins, so a job still queued behind
+                # other domains' syncs is never mistaken for an abandoned
+                # run, while a job that ended without closing the run (or
+                # whose execution has outrun its own timeout) is reconciled
+                # to a terminal state instead of 409ing forever with no
+                # operator recovery path.
+                stale = is_sync_run_stale(
+                    job_status=getattr(running.job, "status", None),
+                    job_started=getattr(running.job, "started", None),
+                    run_started=running.started,
+                    now=timezone.now(),
+                    job_timeout_seconds=SAMBA_SYNC_JOB_TIMEOUT,
+                )
+                if not stale:
+                    return Response(
+                        {"detail": "A Samba sync is already running for this domain."},
+                        status=http_status.HTTP_409_CONFLICT,
+                    )
+                _finish_sync_run(
+                    running,
+                    status="failed",
+                    errors=[
+                        "Sync run's job ended without reaching a terminal sync "
+                        "status, or exceeded its maximum runtime; reconciled as "
+                        "failed so a new sync could start."
+                    ],
+                )
+            sync_run = SambaSyncRun(domain=locked_domain)
+            sync_run.full_clean()
+            sync_run.save()
+
+            # Job.enqueue() dispatches to RQ via transaction.on_commit(); as
+            # long as we're still inside this atomic block, Django defers
+            # that dispatch until the block commits rather than firing it
+            # immediately. Enqueuing and linking sync_run.job here -- instead
+            # of after this block closes -- guarantees a worker can never
+            # start executing before the run it belongs to is durably
+            # linked, closing the race where a crash between an
+            # already-committed, unlinked run and the job-id save left a
+            # straggler worker folding results into a run a later request
+            # had already reconciled as stale and superseded.
+            from ..jobs import SambaSyncJob
+
+            job = None
+            enqueue_failed = False
+            try:
+                job = SambaSyncJob.enqueue(
+                    sync_run_pk=sync_run.pk,
+                    domain_pk=domain.pk,
+                    requester_pk=request.user.pk,
+                    user=request.user,
+                    name=f"Samba Sync: {domain}",
+                )
+            except Exception:
+                enqueue_failed = True
+                _finish_sync_run(
+                    sync_run,
+                    status="failed",
+                    errors=["The Samba sync job could not be enqueued."],
+                )
+            else:
+                job_pk = getattr(job, "pk", None) or getattr(job, "id", None)
+                if job_pk is not None:
+                    sync_run.job_id = job_pk
+                    sync_run.save(update_fields=["job", "last_updated"])
+
+        if enqueue_failed:
+            return Response(
+                {
+                    "detail": "The Samba sync job could not be enqueued.",
+                    "sync_run": sync_run.pk,
+                },
+                status=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        job_pk = getattr(job, "pk", None) or getattr(job, "id", None)
+        payload = {
+            "detail": "Samba sync job enqueued.",
+            "domain": domain.pk,
+            "sync_run": sync_run.pk,
+            "job": job_pk,
+        }
+        if hasattr(job, "get_absolute_url"):
+            payload["url"] = job.get_absolute_url()
+        return Response(payload, status=http_status.HTTP_202_ACCEPTED)
 
 
 class NextcloudInstanceViewSet(NetBoxModelViewSet):

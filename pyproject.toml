@@ -12,6 +12,13 @@ dependencies = [
     # the local editable path in dev (see [tool.uv.sources]); CI runs static
     # tests only and never resolves this dependency.
     "netbox-nms>=0.1.8,<0.2.0",
+    # Seeded Samba RPCIntents, execute_intent(), and the audited execution
+    # ledger used by the observed-state sync engine. FILESERVER_SAMBA_COLLECT_STATE
+    # and execute_intent() do not exist at the v0.1.6 tag (only on netbox-rpc
+    # main); the floor below tracks the not-yet-cut release that will contain
+    # them (see N-MultiCloud/netbox-rpc#219). Do not relax this back to 0.1.6
+    # -- that combination fails to import.
+    "netbox-rpc>=0.1.7,<0.2.0",
 ]
 authors = [
     {name = "Emerson Felipe", email = "emerson.felipe@nmultifibra.com.br"},
@@ -50,6 +57,7 @@ netbox_fileserver = [
 
 [tool.uv.sources]
 netbox-nms = { path = "../netbox-nms", editable = true }
+netbox-rpc = { path = "../netbox-rpc", editable = true }
 
 [tool.ruff]
 line-length = 100

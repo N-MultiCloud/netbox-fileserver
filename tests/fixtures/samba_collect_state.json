@@ -1,0 +1,99 @@
+{
+  "service.samba.1.version": {
+    "version": "Version 4.19.5-Ubuntu"
+  },
+  "service.samba.1.service_status": {
+    "services": [
+      {
+        "unit": "smbd.service",
+        "active_state": "active",
+        "sub_state": "running",
+        "unit_file_state": "enabled",
+        "load_state": "loaded"
+      },
+      {
+        "unit": "nmbd.service",
+        "active_state": "inactive",
+        "sub_state": "dead",
+        "unit_file_state": "disabled",
+        "load_state": "loaded"
+      },
+      {
+        "unit": "winbind.service",
+        "active_state": "active",
+        "sub_state": "running",
+        "unit_file_state": "enabled",
+        "load_state": "loaded"
+      },
+      {
+        "unit": "samba-ad-dc.service",
+        "active_state": "active",
+        "sub_state": "running",
+        "unit_file_state": "enabled",
+        "load_state": "loaded"
+      }
+    ]
+  },
+  "service.samba.1.config_read": {
+    "path": "/etc/samba/smb.conf",
+    "content": "[global]\n  workgroup = EXAMPLE\n  encrypt passwords = yes\n\n[Finance]\n  path = /srv/shares/finance\n  read only = no\n  valid users = @Finance-RW\n  vfs objects = shadow_copy2 recycle\n",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "service.samba.1.config_test": {
+    "valid": true,
+    "exit_code": 0,
+    "stdout": "Loaded services file OK.\n\n[global]\n  workgroup = EXAMPLE\n\n[Finance]\n  path = /srv/shares/finance\n  browseable = yes\n  read only = no\n  guest ok = no\n  valid users = @Finance-RW\n  vfs objects = shadow_copy2 recycle\n",
+    "stderr": ""
+  },
+  "service.samba.1.list_shares": {
+    "shares": [
+      {"name": "Finance"},
+      {"name": "homes"}
+    ]
+  },
+  "service.samba.1.status_report": {
+    "samba_version": "4.19.5",
+    "sessions": [
+      {
+        "session_id": "3218223226",
+        "server_id": {"pid": "4321", "task_id": "0", "vnn": "4294967295", "unique_id": "1"},
+        "username": "alice",
+        "remote_machine": "10.0.30.9",
+        "hostname": "LAPTOP-ALICE",
+        "creation_time": "2026-08-07T01:02:03Z"
+      }
+    ],
+    "tcons": [
+      {
+        "session_id": "3218223226",
+        "server_id": {"pid": "4321", "task_id": "0", "vnn": "4294967295", "unique_id": "1"},
+        "service": "Finance",
+        "machine": "10.0.30.9"
+      }
+    ],
+    "open_files": [
+      {"pid": 3218223226, "filename": "/srv/shares/finance/budget.ods"}
+    ],
+    "byte_range_locks": []
+  },
+  "service.samba.1.user_list": {
+    "users": [
+      {"username": "alice", "source": "ad"},
+      {"username": "legacy", "source": "passdb"}
+    ]
+  },
+  "service.samba.1.group_list": {
+    "groups": [
+      {"name": "Finance-RW", "members": ["alice", "bob"]},
+      {"name": "Domain Admins", "members": ["Administrator"]}
+    ]
+  },
+  "service.samba.1.domain_info": {
+    "netbios_domain": "EXAMPLE",
+    "dns_domain": "example.internal",
+    "server_site": "Default-First-Site-Name",
+    "forest_function_level": "(Windows) 2016",
+    "domain_function_level": "(Windows) 2016",
+    "dc_function_level": "(Windows) 2016"
+  }
+}

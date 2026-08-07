@@ -1,12 +1,107 @@
 # Samba Observed State
 
-This plugin defines the read-side contract for Samba observed state: the
-models, API, and UI that a Samba sync engine will populate once it collects
-runtime data through guarded `netbox-rpc` procedures and persists the
-sanitized result here (tracked as `netbox-fileserver#16`; not yet
-implemented — see this repo's `CLAUDE.md`). Once populated, these rows
-describe what the Samba host is actually reporting; they are not desired
-configuration and do not replace `SambaDomain`, `FileShare`, or `DomainGroup`.
+This plugin defines and populates the read-side contract for Samba observed
+state. The sync engine collects runtime data through guarded `netbox-rpc`
+procedures and persists the sanitized result here. These rows describe what
+the Samba host is actually reporting; they are not desired configuration and
+do not replace `SambaDomain`, `FileShare`, or `DomainGroup`.
+
+## RPC sync lifecycle
+
+`POST /api/plugins/fileserver/samba-domains/{id}/sync/` creates a running
+`SambaSyncRun`, enqueues `SambaSyncJob` on NetBox's default RQ queue, and
+returns HTTP 202 with the NetBox job and sync-run IDs. Only one running sync is
+accepted per domain. The caller needs:
+
+- object-level `change` access to the `SambaDomain`;
+- staff/superuser status, membership in the tenant's
+  `Cloud Portal: <slug> :: Admins` group, or membership in
+  `File Server Reconcilers`; and
+- `netbox_rpc.execute_rpcintent` and
+  `netbox_rpc.execute_rpcprocedure`.
+
+The job loads `netbox_rpc.constants.FILESERVER_SAMBA_COLLECT_STATE` and calls
+`execute_intent()` with the domain's content type and primary key. That seeded
+intent creates the nine audited read executions for version, service state,
+configuration read/test, share list, live status, users, groups, and domain
+information. `rpc_execution_ids` is saved immediately after dispatch,
+including any children committed before a partial fan-out error.
+
+The await stage polls those rows to a terminal status for at most 300 seconds.
+The enclosing job timeout is 360 seconds. Because `SambaSyncJob` holds a
+worker slot for its *entire* poll loop while the child RPC executions it is
+waiting on run on that same default queue, the NetBox RQ deployment MUST run
+at least `W + 1` worker processes, where `W` is the maximum number of Samba
+domain syncs that may legitimately be in flight at once. This is a hard
+operational capacity requirement, not a tuning knob: even one in-flight sync
+self-deadlocks against its own children on a single-worker deployment (it
+still resolves, but only by burning the full 300-second timeout).
+
+Under-provisioning `W` concurrent syncs against fewer than `W + 1` workers
+does **not** degrade gracefully to serialized execution. If every worker ends
+up occupied running `SambaSyncJob` poll loops, none are left free to execute
+the child RPC procedures those loops are waiting on; the syncs do not queue
+behind one another, they all independently run out their full 300-second poll
+budget and terminate as timed-out failures. That is a correctness/outage risk
+for any deployment that lets operators trigger overlapping syncs beyond the
+provisioned worker headroom, not merely slower throughput. Until
+N-MultiCloud/netbox-fileserver#28 (a dedicated sync-await queue that removes
+this coupling entirely) lands, deployments must size RQ worker count to
+expected concurrent sync load and treat that sizing as a release
+prerequisite, not an optimization.
+
+As a tripwire against the single-worst-case topology -- a deployment with
+`W + 1` never provisioned at all, which self-starves *every* sync, not just
+overlapping ones -- the `sync` action rejects the request outright with
+`HTTP 503` before creating a `SambaSyncRun` if fewer than
+`jobs.MIN_SAMBA_SYNC_WORKERS` (2) workers are registered on the sync queue.
+This only catches the zero-headroom case; it cannot detect that all
+registered workers are already busy on unrelated jobs, so correct sizing for
+expected concurrent sync load remains a deployment responsibility, not
+something this check fully substitutes for.
+
+### Fold and replacement ownership
+
+`fold_result(procedure_name, result)` performs no I/O and returns unsaved model
+instances. Persistence is transaction-scoped by collection:
+
+| State | Required successful procedure(s) | Failure behavior |
+|---|---|---|
+| Server version/services/config digest/test result | `version`, `service_status`, `config_read`, `config_test` | Keep the prior row and its `observed_at`. |
+| Primary config file + content-addressed snapshot | `config_read` | Keep prior config rows/snapshots. |
+| Shares + drift | `config_test` and `list_shares` | Keep every prior share row; do not blank rich parameters from a name-only result. |
+| Sessions | `status_report` | Keep prior sessions. |
+| Users | `user_list` | Keep prior users. |
+| Groups | `group_list` | Keep prior groups. |
+
+The current `config_read` RPC result has content and SHA-256 but no filesystem
+size or modification time. The fold computes byte size from the returned raw
+body and uses the collection timestamp for both `mtime` and `fetched_at`; the
+stored digest remains the host-reported value. Likewise, `user_list` and
+`group_list` do not currently return SID/enabled/last-logon metadata, so those
+existing model fields retain their non-secret blank/default representations.
+
+Successful authoritative collection results delete rows that vanished from the
+host. Desired shares absent from the authoritative list are retained/created as
+`missing_on_host` placeholders; observed shares with no desired `FileShare`
+are `unmanaged`. A partial run may still refresh an independently successful
+collection, but never the collection owned by a failed or timed-out procedure.
+
+The current observed schema has no columns for the `domain_info` response, so
+that known procedure has an explicit no-write fold branch. It is still audited
+and participates in whole-run success classification; the engine deliberately
+does not overwrite desired `SambaDomain.realm`, `netbios_name`, or
+`functional_level` fields with observed values.
+
+### Drift comparison
+
+The engine compares desired and observed share `name`, `path`, `smb_enabled`,
+`acl_spec`, `snapshots_enabled`, and `recycle_enabled`. Effective `testparm -s`
+parameters are stored in sanitized `raw_params`: presence means SMB enabled;
+the standard valid/read/write/admin/invalid user lists map to ACL roles; and
+`vfs objects` supplies the `shadow_copy2` and `recycle` flags. The result is
+`in_sync`, `drifted`, `missing_on_host`, or `unmanaged`. Detection is read-only
+and never dispatches the deploy-config intent.
 
 ## Data model
 
@@ -83,3 +178,18 @@ must be positive integers, matching the `netbox-rpc` primary-key contract.
 The collector must redact secrets before sending a payload. Raw passwords,
 hashes, keys, tokens, and credentials must never be accepted as observed-state
 request parameters or persisted in NetBox.
+
+The fold stage adds a second fail-closed boundary. It redacts secret-bearing
+assignment lines (including `encrypt passwords = yes`), validator-rejected
+lines, and complete private-key blocks before constructing either
+`SambaConfigFile.content` or `SambaConfigSnapshot.content`. It validates the
+complete redacted body with `validate_no_secret_material()`; if any unsafe
+material remains, the entire body is replaced with a redaction marker. The
+stored SHA-256 remains the host-reported digest of the original config so it
+can still identify the collected version without storing the unsafe bytes.
+
+Live execution also requires the `service.samba_1.*` backend handlers to be
+registered in the deployed RPC backend. Until that backend release is
+promoted, dispatch remains auditable but child executions will fail closed
+with a handler-not-registered error and the sync run will be `failed` or
+`partial`.

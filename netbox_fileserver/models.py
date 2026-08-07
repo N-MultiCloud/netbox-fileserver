@@ -1209,6 +1209,18 @@ class SambaSyncRun(NetBoxModel):
         choices=SambaSyncStatusChoices,
         default=SambaSyncStatusChoices.STATUS_RUNNING,
     )
+    # The NetBox core.Job that executes this run's SambaSyncJob, set once the
+    # job is durably enqueued (may briefly be null between row creation and
+    # enqueue). Its own status/started timestamps -- not this row's wall-clock
+    # age -- are the source of truth for whether the run is genuinely stuck;
+    # see api/views.py's stale-run reconciliation.
+    job = models.ForeignKey(
+        to="core.Job",
+        on_delete=models.SET_NULL,
+        related_name="+",
+        null=True,
+        blank=True,
+    )
     rpc_execution_ids = models.JSONField(default=list, blank=True)
     error_message = models.TextField(blank=True)
 
