@@ -74,6 +74,8 @@ _SECRET_FIELD_NAMES = {
     "authorization",
     "bearer token",
     "bearer tokens",
+    "bind pass",
+    "bind pw",
     "client key",
     "client keys",
     "client secret",
@@ -83,12 +85,19 @@ _SECRET_FIELD_NAMES = {
     "credential",
     "credentials",
     "cookie",
+    "cookie jar",
+    "cookie jars",
+    "cookies",
+    "db pass",
+    "db pw",
     "encryption key",
     "encryption keys",
     "hash",
     "hashes",
     "lm hash",
     "lm hashes",
+    "login pass",
+    "login pw",
     "nt hash",
     "nt hashes",
     "nt password",
@@ -100,6 +109,8 @@ _SECRET_FIELD_NAMES = {
     "password hash",
     "password hashes",
     "passwd",
+    "passcode",
+    "passcodes",
     "private key",
     "private keys",
     "pwd",
@@ -130,7 +141,13 @@ _SECRET_FIELD_NAMES = {
     "trust auth incoming",
     "trust auth outgoing",
     "user pkcs12",
+    "user pass",
+    "user pw",
 }
+# Short credential aliases need word-boundary matching. Treating them like the
+# longer suffixes above would misclassify ordinary names such as ``compass`` or
+# ``bypass`` as secret-bearing fields.
+_SHORT_SECRET_FIELD_NAMES = {"pass", "pw"}
 _SECRET_VALUE_QUALIFIERS = {
     "base64",
     "binary",
@@ -158,6 +175,19 @@ _COMPACT_SECRET_FIELD_NAMES = {
 _COMPACT_SECRET_VALUE_QUALIFIERS = {
     qualifier.replace(" ", "") for qualifier in _SECRET_VALUE_QUALIFIERS
 }
+_COMPACT_SECRET_FIELD_SUFFIXES = tuple(sorted(_COMPACT_SECRET_FIELD_NAMES))
+_COMPACT_QUALIFIED_SECRET_FIELD_SUFFIXES = tuple(
+    sorted(
+        f"{sensitive_name}{qualifier}"
+        for sensitive_name in _COMPACT_SECRET_FIELD_NAMES
+        for qualifier in _COMPACT_SECRET_VALUE_QUALIFIERS
+    )
+)
+_COMPACT_SHORT_QUALIFIED_SECRET_NAMES = {
+    f"{sensitive_name}{qualifier}"
+    for sensitive_name in _SHORT_SECRET_FIELD_NAMES
+    for qualifier in _COMPACT_SECRET_VALUE_QUALIFIERS
+}
 _PRIVATE_KEY_MARKER_RE = re.compile(
     r"-{4,5}\s*BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s*-{4,5}",
     re.IGNORECASE,
@@ -165,7 +195,7 @@ _PRIVATE_KEY_MARKER_RE = re.compile(
 _PUTTY_PRIVATE_KEY_RE = re.compile(r"^PuTTY-User-Key-File-\d+:", re.IGNORECASE | re.MULTILINE)
 _CREDENTIAL_URL_RE = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/:]+:[^\s/@]+@", re.IGNORECASE)
 _AUTH_SCHEME_VALUE_RE = re.compile(
-    r"^\s*(?:basic|bearer)\s+(?P<value>\S{8,})\s*$",
+    r"^\s*(?:basic|bearer)\s+(?P<value>\S+)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 _CLI_SECRET_ARGUMENT_RE = re.compile(
@@ -209,17 +239,21 @@ def _normalized_sensitive_name(value: object) -> str:
 
 def _is_sensitive_name(value: object) -> bool:
     name = _normalized_sensitive_name(value)
+    words = name.split()
     compact_name = name.replace(" ", "")
-    if any(
-        compact_name.endswith(sensitive_name)
-        for sensitive_name in _COMPACT_SECRET_FIELD_NAMES
+    if words and words[-1] in _SHORT_SECRET_FIELD_NAMES:
+        return True
+    if (
+        len(words) >= 2
+        and words[-2] in _SHORT_SECRET_FIELD_NAMES
+        and words[-1] in _COMPACT_SECRET_VALUE_QUALIFIERS
     ):
         return True
-    return any(
-        compact_name.endswith(f"{sensitive_name}{qualifier}")
-        for sensitive_name in _COMPACT_SECRET_FIELD_NAMES
-        for qualifier in _COMPACT_SECRET_VALUE_QUALIFIERS
-    )
+    if compact_name in _COMPACT_SHORT_QUALIFIED_SECRET_NAMES:
+        return True
+    if compact_name.endswith(_COMPACT_SECRET_FIELD_SUFFIXES):
+        return True
+    return compact_name.endswith(_COMPACT_QUALIFIED_SECRET_FIELD_SUFFIXES)
 
 
 def _is_redacted(value: object) -> bool:
@@ -236,16 +270,27 @@ def _is_redacted(value: object) -> bool:
 def validate_no_secret_material(value: object, *, field_name: str) -> None:
     """Reject credential-bearing structured data or text before persistence."""
     if isinstance(value, dict):
-        normalized_keys = {_normalized_sensitive_name(key): nested for key, nested in value.items()}
-        key_type = str(normalized_keys.get("kty", "")).strip().casefold()
-        private_jwk_fields = (
-            {"d", "p", "q", "dp", "dq", "qi", "oth"}
-            if key_type in {"ec", "okp", "rsa"}
-            else {"k"} if key_type == "oct" else set()
-        )
+        # Preserve every item rather than collapsing normalized keys into a
+        # dictionary. Otherwise an attacker can shadow ``kty`` (for example
+        # with the case-variant ``KTY``) and make private JWK components look
+        # like unrelated one-letter metadata.
+        normalized_items = [
+            (_normalized_sensitive_name(key), nested)
+            for key, nested in value.items()
+        ]
+        key_types = {
+            str(nested).strip().casefold()
+            for key, nested in normalized_items
+            if key == "kty"
+        }
+        private_jwk_fields = set()
+        if key_types & {"ec", "okp", "rsa"}:
+            private_jwk_fields.update({"d", "p", "q", "dp", "dq", "qi", "oth"})
+        if "oct" in key_types:
+            private_jwk_fields.add("k")
         if any(
-            key in normalized_keys and not _is_redacted(normalized_keys[key])
-            for key in private_jwk_fields
+            key in private_jwk_fields and not _is_redacted(nested)
+            for key, nested in normalized_items
         ):
             raise ValidationError({field_name: "Private JSON Web Keys are not permitted."})
         for key, nested_value in value.items():
@@ -253,6 +298,11 @@ def validate_no_secret_material(value: object, *, field_name: str) -> None:
                 raise ValidationError(
                     {field_name: f"Secret-bearing key {key!r} must be removed or redacted."}
                 )
+            # JSON keys are persisted data too. Scan them as text so payloads
+            # cannot hide a credential inside a key such as
+            # ``password=cleartext`` while supplying a harmless value.
+            if isinstance(key, str):
+                validate_no_secret_material(key, field_name=field_name)
             validate_no_secret_material(nested_value, field_name=field_name)
         return
     if isinstance(value, (list, tuple, set)):
@@ -278,7 +328,7 @@ def validate_no_secret_material(value: object, *, field_name: str) -> None:
             raise ValidationError({field_name: "Command-line credentials are not permitted."})
     for line in value.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith(("#", ";")):
+        if not stripped:
             continue
         # Check both separators. Choosing only one lets an '=' inside an
         # Authorization/Cookie value mask the earlier ':' header separator;
@@ -1179,6 +1229,10 @@ class SambaSyncRun(NetBoxModel):
 
     def clean(self) -> None:
         super().clean()
+        if self.started and self.finished and self.finished < self.started:
+            raise ValidationError(
+                {"finished": "Sync run finish time cannot be earlier than its start time."}
+            )
         _validate_json_container(
             self.rpc_execution_ids,
             field_name="rpc_execution_ids",

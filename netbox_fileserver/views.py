@@ -1,5 +1,5 @@
 from django.db.models import Count
-from netbox.object_actions import BulkDelete, BulkEdit, BulkExport, BulkImport, BulkRename
+from netbox.object_actions import BulkDelete, BulkEdit, BulkExport
 from netbox.views import generic
 
 from .filtersets import (
@@ -333,7 +333,7 @@ class DomainGroupBulkDeleteView(generic.BulkDeleteView):
 # CLAUDE.md); their forms only expose ``tags`` (see forms.py), so the
 # generic "Add" action is omitted here to match the ``include_add=False``
 # URL set in urls.py rather than rendering a button with no route.
-OBSERVED_STATE_LIST_ACTIONS = (BulkImport, BulkExport, BulkEdit, BulkRename, BulkDelete)
+OBSERVED_STATE_LIST_ACTIONS = (BulkExport, BulkEdit, BulkDelete)
 
 
 class SambaServerStateListView(generic.ObjectListView):

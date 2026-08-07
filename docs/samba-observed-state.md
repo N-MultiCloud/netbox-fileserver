@@ -22,7 +22,7 @@ therefore supports NetBox tags, custom fields, journaling, and change logging.
 | `SambaObservedUser` | Many per domain: username, SID, enabled state, and last logon only. Domain + username is unique. |
 | `SambaObservedGroup` | Many per domain: name, SID, and a JSON member list. Domain + name is unique. |
 | `SambaSession` | Many per domain: username, machine, remote IP, share, PID, and open time from `smbstatus`. |
-| `SambaSyncRun` | Many per domain: start/finish time, run status, RPC execution IDs, and sanitized error text. |
+| `SambaSyncRun` | Many per domain: start/finish time, run status, RPC execution IDs, and sanitized error text. A finish time cannot predate the run's start. |
 
 Deleting a `SambaDomain` deletes all of its observed rows. The observed tables
 do not add relationships to NetBox users and do not make Samba users into
@@ -51,11 +51,12 @@ view permissions.
 
 ## UI and search
 
-Each model has list, detail, delete, changelog, journal, and bulk-delete pages.
+Each model has list, detail, delete, changelog, journal, export, and bulk-delete pages.
 Create/edit and bulk-edit forms intentionally expose only NetBox metadata such
 as tags; domain relationships and runtime values are reconciler-owned and are
-not operator-editable. Navigation groups all eight pages under **Samba
-Observed** and does not present add buttons.
+not operator-editable. Import and rename actions are omitted because observed
+rows are created and named only by the reconciler. Navigation groups all eight
+pages under **Samba Observed** and does not present add buttons.
 
 Global search indexes server state, observed shares/users/groups, sessions, and
 sync runs. `SambaConfigFile` and `SambaConfigSnapshot` are deliberately excluded
@@ -68,10 +69,12 @@ surfaces as well.
 `SambaObservedUser` stores exactly `domain`, `username`, `sid`, `enabled`, and
 `last_logon`. It has no password, NT/LM hash, credential, secret, key, or
 ciphertext field. The observed serializers reject recognizable secret-bearing
-keys (including camelCase, dotted, bracketed, slashed, and value/history
-variants), assignments, authorization headers, command-line credentials,
+keys (including camelCase, dotted, bracketed, slashed, short `pass`/`pw`
+aliases, and value/history variants), assignments even when they occur on
+commented lines, authorization headers, command-line credentials,
 inline-credential URLs, password-hash formats/dumps, private JWKs, and PEM,
-SSH2, PGP, or PuTTY private-key material. Model validation provides the same
+SSH2, PGP, or PuTTY private-key material. JSON keys are scanned as persisted
+text as well as interpreted as field names. Model validation provides the same
 guard for config content, raw share parameters, and sync error text. JSON
 containers are also shape-checked: snapshots and raw share parameters are
 objects, while group members and RPC execution IDs are lists. RPC execution IDs

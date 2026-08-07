@@ -472,13 +472,16 @@ def test_observed_payloads_reject_embedded_secret_material():
 def test_secret_name_detection_covers_flattened_and_qualified_credentials():
     src = read("models.py")
     secret_names = _literal_assignment("models.py", "_SECRET_FIELD_NAMES")
+    short_secret_names = _literal_assignment("models.py", "_SHORT_SECRET_FIELD_NAMES")
     qualifiers = _literal_assignment("models.py", "_SECRET_VALUE_QUALIFIERS")
 
     assert 're.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()' in src
     assert {
         "authorization",
+        "bind pw",
         "client key",
         "cookie",
+        "cookies",
         "krb5 key",
         "keytab",
         "pkcs12",
@@ -486,9 +489,27 @@ def test_secret_name_detection_covers_flattened_and_qualified_credentials():
         "trust auth incoming",
         "trust auth outgoing",
     } <= secret_names
+    assert {"pass", "pw"} <= short_secret_names
     assert {"binary", "ciphertext", "data", "history", "material", "value"} <= qualifiers
-    assert 'key_type in {"ec", "okp", "rsa"}' in src
+    assert 'key_types & {"ec", "okp", "rsa"}' in src
+    assert "for key, nested in normalized_items" in src
+    assert "validate_no_secret_material(key, field_name=field_name)" in src
+    assert "stripped.startswith" not in src
+    assert 'r"^\\s*(?:basic|bearer)\\s+(?P<value>\\S+)\\s*$"' in src
     assert 'for separator in ("=", ":"):' in src
+
+
+def test_sync_run_rejects_a_finish_before_its_start():
+    sync_run_class = _class_node("models.py", "SambaSyncRun")
+    clean_method = next(
+        node
+        for node in sync_run_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "clean"
+    )
+    clean_src = ast.get_source_segment(read("models.py"), clean_method)
+    assert clean_src is not None
+    assert "self.finished < self.started" in clean_src
+    assert "finish time cannot be earlier" in clean_src
 
 
 def test_observed_json_fields_enforce_their_documented_container_shapes():
@@ -992,3 +1013,22 @@ def test_navigation_and_urls_cover_every_model():
         assert f'"{slug}"' in urls, f"{slug} slug missing from urls"
 
     assert urls.count("        include_add=False,") == len(SAMBA_OBSERVED_MODEL_FIELDS)
+
+
+def test_observed_list_actions_only_advertise_routable_operations():
+    assignment = next(
+        node
+        for node in ast.parse(read("views.py")).body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "OBSERVED_STATE_LIST_ACTIONS"
+            for target in node.targets
+        )
+    )
+    assert isinstance(assignment.value, ast.Tuple)
+    assert {
+        element.id
+        for element in assignment.value.elts
+        if isinstance(element, ast.Name)
+    } == {"BulkExport", "BulkEdit", "BulkDelete"}
