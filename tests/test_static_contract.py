@@ -494,6 +494,8 @@ def test_secret_name_detection_covers_flattened_and_qualified_credentials():
     assert 'key_types & {"ec", "okp", "rsa"}' in src
     assert "for key, nested in normalized_items" in src
     assert "validate_no_secret_material(key, field_name=field_name)" in src
+    assert "Secret-bearing key {key!r}" not in src
+    assert "Secret-bearing assignment {key.strip()!r}" not in src
     assert "stripped.startswith" not in src
     assert 'r"^\\s*(?:basic|bearer)\\s+(?P<value>\\S+)\\s*$"' in src
     assert 'for separator in ("=", ":"):' in src

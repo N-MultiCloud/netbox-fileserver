@@ -296,7 +296,7 @@ def validate_no_secret_material(value: object, *, field_name: str) -> None:
         for key, nested_value in value.items():
             if _is_sensitive_name(key) and not _is_redacted(nested_value):
                 raise ValidationError(
-                    {field_name: f"Secret-bearing key {key!r} must be removed or redacted."}
+                    {field_name: "Secret-bearing keys must be removed or redacted."}
                 )
             # JSON keys are persisted data too. Scan them as text so payloads
             # cannot hide a credential inside a key such as
@@ -339,11 +339,7 @@ def validate_no_secret_material(value: object, *, field_name: str) -> None:
             key, candidate = stripped.split(separator, 1)
             if _is_sensitive_name(key) and not _is_redacted(candidate):
                 raise ValidationError(
-                    {
-                        field_name: (
-                            f"Secret-bearing assignment {key.strip()!r} is not permitted."
-                        )
-                    }
+                    {field_name: "Secret-bearing assignments are not permitted."}
                 )
 
 
