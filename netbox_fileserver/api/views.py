@@ -1,5 +1,7 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from netbox.api.viewsets import NetBoxModelViewSet
+from rest_framework import status as http_status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.generics import get_object_or_404
@@ -195,6 +197,78 @@ class SambaDomainViewSet(NetBoxModelViewSet):
     ).prefetch_related("tags")
     serializer_class = SambaDomainSerializer
     filterset_class = SambaDomainFilterSet
+
+    @action(detail=True, methods=["post"], url_path="sync")
+    def sync(self, request, pk=None):
+        queryset = (
+            SambaDomain.objects.restrict(request.user, "change")
+            .select_related("deployment__tenant", "dc_vm", "dc_ip")
+            .prefetch_related("tags")
+        )
+        domain = get_object_or_404(queryset, pk=pk)
+        if not (
+            _is_tenant_admin(request.user, domain.deployment.tenant)
+            or _is_reconciler_service_account(request.user)
+        ):
+            raise PermissionDenied(
+                "Staff, a tenant admin, or a File Server Reconciler is required."
+            )
+        for permission in (
+            "netbox_rpc.execute_rpcintent",
+            "netbox_rpc.execute_rpcprocedure",
+        ):
+            if not request.user.has_perm(permission):
+                raise PermissionDenied(f"{permission} permission is required.")
+
+        with transaction.atomic():
+            locked_domain = SambaDomain.objects.select_for_update().get(pk=domain.pk)
+            if SambaSyncRun.objects.filter(
+                domain=locked_domain,
+                status="running",
+            ).exists():
+                return Response(
+                    {"detail": "A Samba sync is already running for this domain."},
+                    status=http_status.HTTP_409_CONFLICT,
+                )
+            sync_run = SambaSyncRun(domain=locked_domain)
+            sync_run.full_clean()
+            sync_run.save()
+
+        from ..jobs import SambaSyncJob
+
+        try:
+            job = SambaSyncJob.enqueue(
+                sync_run_pk=sync_run.pk,
+                domain_pk=domain.pk,
+                requester_pk=request.user.pk,
+                user=request.user,
+                name=f"Samba Sync: {domain}",
+            )
+        except Exception:
+            from ..samba_sync import _finish_sync_run
+
+            _finish_sync_run(
+                sync_run,
+                status="failed",
+                errors=["The Samba sync job could not be enqueued."],
+            )
+            return Response(
+                {
+                    "detail": "The Samba sync job could not be enqueued.",
+                    "sync_run": sync_run.pk,
+                },
+                status=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        payload = {
+            "detail": "Samba sync job enqueued.",
+            "domain": domain.pk,
+            "sync_run": sync_run.pk,
+            "job": getattr(job, "pk", None) or getattr(job, "id", None),
+        }
+        if hasattr(job, "get_absolute_url"):
+            payload["url"] = job.get_absolute_url()
+        return Response(payload, status=http_status.HTTP_202_ACCEPTED)
 
 
 class NextcloudInstanceViewSet(NetBoxModelViewSet):

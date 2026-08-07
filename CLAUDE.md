@@ -15,7 +15,9 @@ Samba AD/DC + Nextcloud) as **NetBox desired state**. NetBox is the source of
 truth; an external **NMS file-server backend** reconciles Proxmox/Samba/Nextcloud
 to match and writes observed status back. Depends on
 [netbox-nms](https://git.nmulti.cloud/N-MultiCloud/netbox-nms) for the
-`NMSBackend` connection registry.
+`NMSBackend` connection registry and
+[netbox-rpc](https://git.nmulti.cloud/N-MultiCloud/netbox-rpc) for the audited
+Samba intent, execution ledger, and RQ procedure jobs.
 
 Migration dependencies on NetBox core apps must target nodes present in both
 NetBox 4.5.8 and 4.6.x while the plugin advertises 4.5 compatibility.
@@ -24,7 +26,7 @@ NetBox 4.5.8 and 4.6.x while the plugin advertises 4.5 compatibility.
 
 ```
 netbox_fileserver/
-├── __init__.py           NetBoxFileServerConfig (base_url="fileserver", required_plugins=["netbox_nms"])
+├── __init__.py           NetBoxFileServerConfig + required plugins/job registration
 ├── choices.py            DeploymentStatusChoices, ACLRoleChoices, SambaFunctionalLevelChoices
 ├── models.py             6 desired/product models + 8 Samba observed-state models
 ├── filtersets.py         NetBoxModelFilterSet subclasses
@@ -35,6 +37,8 @@ netbox_fileserver/
 ├── navigation.py         PluginMenu (Deployments / Samba / Nextcloud / Shares)
 ├── search.py             SearchIndex registrations (11; config bodies excluded)
 ├── template_content.py   Tenant + VirtualMachine detail-page panels
+├── samba_sync.py         RPC dispatch/await/fold/redaction/persistence/drift engine
+├── jobs.py               SambaSyncJob NetBox RQ runner
 ├── api/                  DRF serializers, viewsets, NetBoxRouter
 ├── graphql/              strawberry_django types + schema
 ├── migrations/0001_initial.py
@@ -118,6 +122,21 @@ define this integration surface are vendored at
   transitions `pending_approval` deployments to `planned` or `active`. It is
   gated to staff/superusers or the tenant's
   `Cloud Portal: <tenant-slug> :: Admins` group.
+- Samba sync: `POST /api/plugins/fileserver/samba-domains/{id}/sync/` creates a
+  `SambaSyncRun` and queues `SambaSyncJob`. It requires domain change access,
+  an approved operator/reconciler identity, and the netbox-rpc intent/procedure
+  execute permissions. The job dispatches only the seeded
+  `FILESERVER_SAMBA_COLLECT_STATE` intent, records every child execution ID,
+  polls for at most 300 seconds, and folds only successful procedure results.
+  Collection replacement is fail-closed: server state requires the full
+  version/service/config quartet and shares require both effective config and
+  the authoritative share list. Config is redacted and revalidated before
+  file/snapshot persistence. Drift is report-only and never auto-remediates.
+  The shared-default-queue topology requires at least two RQ workers.
+- Live Samba sync is pending production registration of the
+  `service.samba_1.*` backend handlers. Until that backend promotion lands,
+  child executions fail closed as handler-not-registered; fixture-backed fold
+  and drift behavior is still fully testable here.
 - Deploy: `deploy-netbox-plugin fileserver` (whitelisted in
   `nmulticloud-context/deploy/bin/{deploy-netbox-plugin,nmc-deploy-lib}`), CI in
   `.gitea/workflows/deploy-production.yml` on push to `main`.

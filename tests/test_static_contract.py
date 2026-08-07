@@ -22,6 +22,8 @@ MODEL_FILES = (
     "navigation.py",
     "search.py",
     "template_content.py",
+    "jobs.py",
+    "samba_sync.py",
     "api/serializers.py",
     "api/views.py",
     "api/urls.py",
@@ -73,9 +75,10 @@ def test_plugin_config_name_and_base_url():
     assert 'base_url = "fileserver"' in src
 
 
-def test_plugin_requires_netbox_nms():
+def test_plugin_requires_netbox_nms_and_rpc():
     src = read("__init__.py")
-    assert 'required_plugins = ["netbox_nms"]' in src
+    assert 'required_plugins = ["netbox_nms", "netbox_rpc"]' in src
+    assert "from . import jobs" in src
 
 
 def test_plugin_version_bounds():
@@ -580,6 +583,46 @@ def test_api_actions_cover_enrollment_consume_and_deployment_approve():
     assert 'FileServerDeployment.objects.restrict(request.user, "change")' in src
     assert "global reconciler service identity boundary" in src
     assert "FileServerAgentEnrollSerializer" in src
+
+
+def test_samba_sync_action_is_permission_gated_and_enqueues_rq_job():
+    api_src = read("api/views.py")
+    jobs_src = read("jobs.py")
+    sync_src = read("samba_sync.py")
+
+    assert '@action(detail=True, methods=["post"], url_path="sync")' in api_src
+    assert 'SambaDomain.objects.restrict(request.user, "change")' in api_src
+    assert '"netbox_rpc.execute_rpcintent"' in api_src
+    assert '"netbox_rpc.execute_rpcprocedure"' in api_src
+    assert "SambaSyncJob.enqueue(" in api_src
+    assert "HTTP_202_ACCEPTED" in api_src
+    assert "class SambaSyncJob(JobRunner):" in jobs_src
+    assert "perform_samba_sync(" in jobs_src
+    assert "def dispatch_collect_state(" in sync_src
+    assert "def await_executions(" in sync_src
+    assert "def fold_result(" in sync_src
+
+
+def test_samba_sync_uses_rpc_intent_and_dotted_procedure_constants_only():
+    src = read("samba_sync.py")
+    assert "from netbox_rpc.constants import (" in src
+    assert "FILESERVER_SAMBA_COLLECT_STATE" in src
+    assert "execute_intent(" in src
+    assert "assigned_object_type=assigned_type" in src
+    assert "service.samba_1" not in src
+    assert "http://" not in src and "https://" not in src
+    assert "ssh" not in src.casefold()
+
+
+def test_samba_sync_redacts_config_and_fail_closes_collection_replacement():
+    src = read("samba_sync.py")
+    assert "def redact_secret_material(" in src
+    assert 'validator(redacted, field_name="content")' in src
+    assert "_UNSAFE_CONTENT_REDACTION" in src
+    assert "def replacement_plan(" in src
+    assert '"shares": succeeded >= SHARE_STATE_PROCEDURES' in src
+    assert '"users": SAMBA_1_USER_LIST in succeeded' in src
+    assert '"groups": SAMBA_1_GROUP_LIST in succeeded' in src
 
 
 # ────────────────────────────── Migration ─────────────────────────────

@@ -5,7 +5,8 @@
 NetBox plugin modeling the N-MultiCloud File Server product (Samba AD/DC +
 Nextcloud) as **desired state**. NetBox = source of truth; an external NMS
 file-server backend reconciles and writes observed status back. Depends on
-`netbox-nms` (`NMSBackend` registry).
+`netbox-nms` (`NMSBackend` registry) and `netbox-rpc` (audited Samba intents
+and executions).
 
 Migration dependencies on NetBox core apps must target nodes present in both
 NetBox 4.5.8 and 4.6.x while the plugin advertises 4.5 compatibility.
@@ -45,8 +46,10 @@ NetBox 4.5.8 and 4.6.x while the plugin advertises 4.5 compatibility.
 
 | File | What it does |
 |---|---|
-| `netbox_fileserver/__init__.py` | Plugin config (`base_url="fileserver"`, `required_plugins=["netbox_nms"]`) |
+| `netbox_fileserver/__init__.py` | Plugin config and required-plugin/job registration |
 | `netbox_fileserver/models.py` | 14 Django models (6 desired/product + 8 Samba observed) |
+| `netbox_fileserver/samba_sync.py` | RPC intent dispatch, bounded await, pure fold/redaction, persistence, and drift |
+| `netbox_fileserver/jobs.py` | `SambaSyncJob` NetBox RQ runner |
 | `netbox_fileserver/api/` | DRF serializers, viewsets, NetBoxRouter |
 | `netbox_fileserver/graphql/` | strawberry_django types + schema |
 | `netbox_fileserver/template_content.py` | Tenant + VM detail-page panels |
@@ -56,6 +59,7 @@ NetBox 4.5.8 and 4.6.x while the plugin advertises 4.5 compatibility.
 | `docs/enrollment.md` | Enrollment token + pending-approval API contract |
 | `docs/samba-observed-state.md` | Samba observed-state ownership, API, UI, and security contract |
 | `tests/test_static_contract.py` | Import-free contract tests (CI, no DB) |
+| `tests/test_samba_sync.py` | Import-free fixture tests for folds, redaction, drift, and failure gates |
 
 ## Enrollment Flow
 
@@ -68,6 +72,26 @@ NetBox 4.5.8 and 4.6.x while the plugin advertises 4.5 compatibility.
 - `POST /api/plugins/fileserver/deployments/{id}/approve/` lets staff/superusers
   or `Cloud Portal: <tenant-slug> :: Admins` approve `pending_approval`
   deployments into `planned` or `active`.
+
+## Samba Sync Flow
+
+- `POST /api/plugins/fileserver/samba-domains/{id}/sync/` requires domain
+  change access, an approved operator/reconciler identity, and both netbox-rpc
+  execute permissions; it returns HTTP 202 with RQ job and sync-run IDs.
+- `SambaSyncJob` calls only `execute_intent(FILESERVER_SAMBA_COLLECT_STATE, …)`
+  and records its child execution primary keys. Never replace this with direct
+  procedure creation, backend HTTP, SSH, or local commands.
+- Collection replacement is procedure-owned and fail-closed. In particular,
+  shares require successful `config_test` plus `list_shares`; server
+  `observed_at` requires the complete version/service/config-read/config-test
+  quartet.
+- Config fold must run `redact_secret_material()` before either config model is
+  constructed. Do not weaken or catch-and-ignore `validate_no_secret_material()`.
+- Drift is read-only and compares name/path/SMB enabled/ACL/snapshot/recycle
+  state. It must never invoke the deploy-config intent.
+- The default-queue polling topology needs at least two NetBox RQ workers. Live
+  calls remain unverifiable until the Samba handler family is deployed by the
+  RPC backend promotion.
 
 ## Dev Commands
 
