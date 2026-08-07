@@ -13,7 +13,9 @@ from netbox.models import NetBoxModel
 from .choices import (
     ACLRoleChoices,
     DeploymentStatusChoices,
+    SambaDriftStateChoices,
     SambaFunctionalLevelChoices,
+    SambaSyncStatusChoices,
 )
 
 __all__ = (
@@ -23,6 +25,14 @@ __all__ = (
     "NextcloudInstance",
     "FileShare",
     "DomainGroup",
+    "SambaServerState",
+    "SambaConfigFile",
+    "SambaConfigSnapshot",
+    "SambaObservedShare",
+    "SambaObservedUser",
+    "SambaObservedGroup",
+    "SambaSession",
+    "SambaSyncRun",
 )
 
 # DNS label / FQDN for the customer's web-drive hostname (lowercase).
@@ -37,6 +47,10 @@ _NETBIOS_VALIDATOR = RegexValidator(
     regex=r"^[A-Z0-9]([A-Z0-9-]{0,13}[A-Z0-9])?$",
     message="NetBIOS name must be 1-15 uppercase alphanumeric/hyphen chars.",
 )
+_SHA256_VALIDATOR = RegexValidator(
+    regex=r"^[0-9a-fA-F]{64}$",
+    message="Enter a 64-character hexadecimal SHA-256 digest.",
+)
 # SMB share name — no path separators or reserved characters.
 _SHARE_NAME_INVALID = set('/\\:*?"<>|')
 DEFAULT_ENROLLMENT_TOKEN_TTL = timedelta(hours=24)
@@ -47,10 +61,320 @@ _DEPLOYMENT_APPROVAL_STATUSES = {
 }
 _ALLOW_APPROVAL_STATUS_WRITE_ATTR = "_fileserver_allow_approval_status_write"
 _ALLOW_RECONCILER_STATUS_WRITE_ATTR = "_fileserver_allow_reconciler_status_write"
+_REDACTED_VALUES = {"", "***", "<redacted>", "[redacted]", "redacted"}
+_SECRET_FIELD_NAMES = {
+    "access key",
+    "access keys",
+    "api key",
+    "api keys",
+    "api secret",
+    "api secrets",
+    "auth token",
+    "auth tokens",
+    "authorization",
+    "bearer token",
+    "bearer tokens",
+    "bind pass",
+    "bind pw",
+    "client key",
+    "client keys",
+    "client secret",
+    "client secrets",
+    "ciphertext",
+    "ciphertexts",
+    "credential",
+    "credentials",
+    "cookie",
+    "cookie jar",
+    "cookie jars",
+    "cookies",
+    "db pass",
+    "db pw",
+    "encryption key",
+    "encryption keys",
+    "hash",
+    "hashes",
+    "lm hash",
+    "lm hashes",
+    "login pass",
+    "login pw",
+    "nt hash",
+    "nt hashes",
+    "nt password",
+    "nt passwords",
+    "passphrase",
+    "passphrases",
+    "password",
+    "passwords",
+    "password hash",
+    "password hashes",
+    "passwd",
+    "passcode",
+    "passcodes",
+    "private key",
+    "private keys",
+    "pwd",
+    "salt",
+    "salts",
+    "secret",
+    "secret key",
+    "secret keys",
+    "secrets",
+    "session id",
+    "session ids",
+    "session key",
+    "session keys",
+    "ssh key",
+    "ssh keys",
+    "supplemental credential",
+    "supplemental credentials",
+    "token",
+    "tokens",
+    # Secret-bearing Samba/AD attributes whose names do not end in one of the
+    # generic terms above.
+    "krb5 key",
+    "krb5 keys",
+    "keytab",
+    "keytabs",
+    "pek list",
+    "pkcs12",
+    "trust auth incoming",
+    "trust auth outgoing",
+    "user pkcs12",
+    "user pass",
+    "user pw",
+}
+# Short credential aliases need word-boundary matching. Treating them like the
+# longer suffixes above would misclassify ordinary names such as ``compass`` or
+# ``bypass`` as secret-bearing fields.
+_SHORT_SECRET_FIELD_NAMES = {"pass", "pw"}
+_SECRET_VALUE_QUALIFIERS = {
+    "base64",
+    "binary",
+    "blob",
+    "bytes",
+    "ciphertext",
+    "content",
+    "contents",
+    "data",
+    "encoded",
+    "encrypted",
+    "history",
+    "jwk",
+    "material",
+    "pem",
+    "raw",
+    "string",
+    "text",
+    "value",
+    "values",
+}
+_COMPACT_SECRET_FIELD_NAMES = {
+    sensitive_name.replace(" ", "") for sensitive_name in _SECRET_FIELD_NAMES
+}
+_COMPACT_SECRET_VALUE_QUALIFIERS = {
+    qualifier.replace(" ", "") for qualifier in _SECRET_VALUE_QUALIFIERS
+}
+_COMPACT_SECRET_FIELD_SUFFIXES = tuple(sorted(_COMPACT_SECRET_FIELD_NAMES))
+_COMPACT_QUALIFIED_SECRET_FIELD_SUFFIXES = tuple(
+    sorted(
+        f"{sensitive_name}{qualifier}"
+        for sensitive_name in _COMPACT_SECRET_FIELD_NAMES
+        for qualifier in _COMPACT_SECRET_VALUE_QUALIFIERS
+    )
+)
+_COMPACT_SHORT_QUALIFIED_SECRET_NAMES = {
+    f"{sensitive_name}{qualifier}"
+    for sensitive_name in _SHORT_SECRET_FIELD_NAMES
+    for qualifier in _COMPACT_SECRET_VALUE_QUALIFIERS
+}
+_PRIVATE_KEY_MARKER_RE = re.compile(
+    r"-{4,5}\s*BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s*-{4,5}",
+    re.IGNORECASE,
+)
+_PUTTY_PRIVATE_KEY_RE = re.compile(r"^PuTTY-User-Key-File-\d+:", re.IGNORECASE | re.MULTILINE)
+_CREDENTIAL_URL_RE = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/:]+:[^\s/@]+@", re.IGNORECASE)
+_AUTH_SCHEME_VALUE_RE = re.compile(
+    r"^\s*(?:basic|bearer)\s+(?P<value>\S+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_CLI_SECRET_ARGUMENT_RE = re.compile(
+    r"(?:^|\s)--?(?:access[-_.]?key|api[-_.]?key|client[-_.]?secret|"
+    r"kerberos[-_.]?key|pass(?:word|wd|phrase)?|private[-_.]?key|pwd|secret|token)"
+    r"(?:=|\s+)(?P<value>\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)",
+    re.IGNORECASE,
+)
+_PASSWORD_HASH_RE = re.compile(
+    r"(?:^|[=:\s])(?:"
+    r"\$(?:1|2[aby]?|5|6|y|argon2(?:i|d|id))\$[^\s:]+|"
+    r"(?:argon2|bcrypt(?:_sha256)?|pbkdf2_(?:sha1|sha256)|scrypt)\$[^\s:]+|"
+    r"\{(?:crypt|md5|sha|sha256|sha512|smd5|ssha|ssha256|ssha512)\}[A-Za-z0-9+/=]+"
+    r")(?=$|[:\s])",
+    re.IGNORECASE | re.MULTILINE,
+)
+_PWDUMP_HASH_RE = re.compile(
+    r"^[^:\r\n]+:\d+:(?:[0-9a-f]{32}|\*{32}):(?:[0-9a-f]{32}|\*{32})(?::|$)",
+    re.IGNORECASE | re.MULTILINE,
+)
+# Splits camelCase/acronym-run names (sambaNTPassword, unicodePwd) into words
+# before normalization, so the secret-name denylist above matches directory
+# attribute names as well as underscore/space-separated ones.
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_ACRONYM_BOUNDARY_RE = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])")
 
 
 def _token_hash(plaintext: str) -> str:
     return hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+
+
+def _normalized_sensitive_name(value: object) -> str:
+    text = str(value).strip()
+    text = _CAMEL_BOUNDARY_RE.sub(" ", text)
+    text = _ACRONYM_BOUNDARY_RE.sub(" ", text)
+    # Flatten dotted/bracketed/slashed paths as well as the usual separators:
+    # ``auth.password``, ``user[unicodePwd]``, and ``auth/password`` must be
+    # treated exactly like nested dictionaries with a sensitive terminal key.
+    return re.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()
+
+
+def _is_sensitive_name(value: object) -> bool:
+    name = _normalized_sensitive_name(value)
+    words = name.split()
+    compact_name = name.replace(" ", "")
+    if words and words[-1] in _SHORT_SECRET_FIELD_NAMES:
+        return True
+    if (
+        len(words) >= 2
+        and words[-2] in _SHORT_SECRET_FIELD_NAMES
+        and words[-1] in _COMPACT_SECRET_VALUE_QUALIFIERS
+    ):
+        return True
+    if compact_name in _COMPACT_SHORT_QUALIFIED_SECRET_NAMES:
+        return True
+    if compact_name.endswith(_COMPACT_SECRET_FIELD_SUFFIXES):
+        return True
+    return compact_name.endswith(_COMPACT_QUALIFIED_SECRET_FIELD_SUFFIXES)
+
+
+def _is_redacted(value: object) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return normalized in _REDACTED_VALUES or (
+        len(normalized) >= 3 and set(normalized) == {"*"}
+    )
+
+
+def validate_no_secret_material(value: object, *, field_name: str) -> None:
+    """Reject credential-bearing structured data or text before persistence."""
+    if isinstance(value, dict):
+        # Preserve every item rather than collapsing normalized keys into a
+        # dictionary. Otherwise an attacker can shadow ``kty`` (for example
+        # with the case-variant ``KTY``) and make private JWK components look
+        # like unrelated one-letter metadata.
+        normalized_items = [
+            (_normalized_sensitive_name(key), nested)
+            for key, nested in value.items()
+        ]
+        key_types = {
+            str(nested).strip().casefold()
+            for key, nested in normalized_items
+            if key == "kty"
+        }
+        private_jwk_fields = set()
+        if key_types & {"ec", "okp", "rsa"}:
+            private_jwk_fields.update({"d", "p", "q", "dp", "dq", "qi", "oth"})
+        if "oct" in key_types:
+            private_jwk_fields.add("k")
+        if any(
+            key in private_jwk_fields and not _is_redacted(nested)
+            for key, nested in normalized_items
+        ):
+            raise ValidationError({field_name: "Private JSON Web Keys are not permitted."})
+        for key, nested_value in value.items():
+            if _is_sensitive_name(key) and not _is_redacted(nested_value):
+                raise ValidationError(
+                    {field_name: "Secret-bearing keys must be removed or redacted."}
+                )
+            # JSON keys are persisted data too. Scan them as text so payloads
+            # cannot hide a credential inside a key such as
+            # ``password=cleartext`` while supplying a harmless value.
+            if isinstance(key, str):
+                validate_no_secret_material(key, field_name=field_name)
+            validate_no_secret_material(nested_value, field_name=field_name)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for nested_value in value:
+            validate_no_secret_material(nested_value, field_name=field_name)
+        return
+    if not isinstance(value, str) or _is_redacted(value):
+        return
+    if (
+        _PRIVATE_KEY_MARKER_RE.search(value)
+        or _PUTTY_PRIVATE_KEY_RE.search(value)
+        or _CREDENTIAL_URL_RE.search(value)
+    ):
+        raise ValidationError({field_name: "Private keys and inline credentials are not permitted."})
+    if _PASSWORD_HASH_RE.search(value) or _PWDUMP_HASH_RE.search(value):
+        raise ValidationError({field_name: "Password hashes are not permitted."})
+    for match in _AUTH_SCHEME_VALUE_RE.finditer(value):
+        if not _is_redacted(match.group("value")):
+            raise ValidationError({field_name: "Authorization credentials are not permitted."})
+    for match in _CLI_SECRET_ARGUMENT_RE.finditer(value):
+        candidate = match.group("value").strip("\"'")
+        if not _is_redacted(candidate):
+            raise ValidationError({field_name: "Command-line credentials are not permitted."})
+    for line in value.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Check both separators. Choosing only one lets an '=' inside an
+        # Authorization/Cookie value mask the earlier ':' header separator;
+        # checking only ':' would in turn miss URL query parameters.
+        for separator in ("=", ":"):
+            if separator not in stripped:
+                continue
+            key, candidate = stripped.split(separator, 1)
+            if _is_sensitive_name(key) and not _is_redacted(candidate):
+                raise ValidationError(
+                    {field_name: "Secret-bearing assignments are not permitted."}
+                )
+
+
+def _validate_secret_free_fields(instance: models.Model, *field_names: str) -> None:
+    """Apply ``validate_no_secret_material`` to model fields at the ORM layer.
+
+    Runs on every ``full_clean()`` (forms and the admin/UI edit path included),
+    closing the gap left by the REST-only ``SecretSafeObservedSerializerMixin``
+    — a custom field or JSON payload entered through the UI never touches that
+    serializer. Always includes ``custom_field_data`` so an operator-configured
+    custom field cannot become a secret-storage bypass on any observed model.
+    """
+    for field_name in (*field_names, "custom_field_data"):
+        validate_no_secret_material(getattr(instance, field_name, None), field_name=field_name)
+
+
+def _validate_json_container(
+    value: object,
+    *,
+    field_name: str,
+    expected_type: type[dict] | type[list],
+) -> None:
+    """Enforce the documented container shape for observed JSON fields."""
+    if not isinstance(value, expected_type):
+        raise ValidationError(
+            {field_name: f"{field_name} must be a JSON {expected_type.__name__}."}
+        )
+
+
+def _validate_positive_integer_list(value: list[object], *, field_name: str) -> None:
+    """Reject non-RPC identifiers, including booleans and opaque token strings."""
+    if any(type(item) is not int or item <= 0 for item in value):
+        raise ValidationError(
+            {field_name: f"{field_name} must contain only positive integer IDs."}
+        )
 
 
 class FileServerDeployment(NetBoxModel):
@@ -603,8 +927,8 @@ class FileShare(NetBoxModel):
 
 class DomainGroup(NetBoxModel):
     """AD group referenced by share ACLs — modeled so ``acl_spec`` validates
-    against real groups. End users are NOT modeled; passwords/user churn stay
-    in AD (runtime state)."""
+    against real groups. Desired end users are NOT modeled; passwords/user churn
+    stay in AD (runtime state)."""
 
     domain = models.ForeignKey(
         to="netbox_fileserver.SambaDomain",
@@ -622,3 +946,296 @@ class DomainGroup(NetBoxModel):
 
     def __str__(self) -> str:
         return self.name
+
+
+class SambaServerState(NetBoxModel):
+    """Last observed Samba version, service health, and config validation."""
+
+    domain = models.OneToOneField(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="server_state",
+    )
+    version = models.CharField(max_length=100, blank=True)
+    smbd_active_state = models.CharField(max_length=30, blank=True)
+    smbd_sub_state = models.CharField(max_length=30, blank=True)
+    smbd_unit_file_state = models.CharField(max_length=30, blank=True)
+    nmbd_active_state = models.CharField(max_length=30, blank=True)
+    nmbd_sub_state = models.CharField(max_length=30, blank=True)
+    nmbd_unit_file_state = models.CharField(max_length=30, blank=True)
+    winbind_active_state = models.CharField(max_length=30, blank=True)
+    winbind_sub_state = models.CharField(max_length=30, blank=True)
+    winbind_unit_file_state = models.CharField(max_length=30, blank=True)
+    samba_ad_dc_active_state = models.CharField(max_length=30, blank=True)
+    samba_ad_dc_sub_state = models.CharField(max_length=30, blank=True)
+    samba_ad_dc_unit_file_state = models.CharField(max_length=30, blank=True)
+    config_sha256 = models.CharField(
+        max_length=64,
+        blank=True,
+        validators=[_SHA256_VALIDATOR],
+    )
+    testparm_ok = models.BooleanField(default=False)
+    observed_at = models.DateTimeField()
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("domain",)
+        verbose_name = "Samba Server State"
+
+    def __str__(self) -> str:
+        return f"Samba state ({self.domain})"
+
+    def clean(self) -> None:
+        super().clean()
+        _validate_secret_free_fields(
+            self,
+            "version",
+            "smbd_active_state",
+            "smbd_sub_state",
+            "smbd_unit_file_state",
+            "nmbd_active_state",
+            "nmbd_sub_state",
+            "nmbd_unit_file_state",
+            "winbind_active_state",
+            "winbind_sub_state",
+            "winbind_unit_file_state",
+            "samba_ad_dc_active_state",
+            "samba_ad_dc_sub_state",
+            "samba_ad_dc_unit_file_state",
+            "config_sha256",
+        )
+
+
+class SambaConfigFile(NetBoxModel):
+    """Last fetched content and file metadata for one Samba config file."""
+
+    domain = models.ForeignKey(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="config_files",
+    )
+    path = models.CharField(max_length=255)
+    content = models.TextField(blank=True)
+    sha256 = models.CharField(max_length=64, validators=[_SHA256_VALIDATOR])
+    size = models.PositiveBigIntegerField()
+    mtime = models.DateTimeField()
+    is_primary = models.BooleanField(default=False)
+    fetched_at = models.DateTimeField()
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("domain", "path")
+        unique_together = (("domain", "path"),)
+        verbose_name = "Samba Config File"
+
+    def __str__(self) -> str:
+        return self.path
+
+    def clean(self) -> None:
+        super().clean()
+        _validate_secret_free_fields(self, "path", "content")
+
+
+class SambaConfigSnapshot(NetBoxModel):
+    """Point-in-time archive of a Samba configuration file set."""
+
+    domain = models.ForeignKey(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="config_snapshots",
+    )
+    snapshot_id = models.CharField(max_length=128)
+    content = models.JSONField(default=dict)
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("domain", "-created")
+        unique_together = (("domain", "snapshot_id"),)
+        verbose_name = "Samba Config Snapshot"
+
+    def __str__(self) -> str:
+        return self.snapshot_id
+
+    def clean(self) -> None:
+        super().clean()
+        _validate_json_container(
+            self.content,
+            field_name="content",
+            expected_type=dict,
+        )
+        _validate_secret_free_fields(self, "snapshot_id", "content")
+
+
+class SambaObservedShare(NetBoxModel):
+    """Effective Samba share state reported by the reconciler."""
+
+    domain = models.ForeignKey(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="observed_shares",
+    )
+    name = models.CharField(max_length=80)
+    path = models.CharField(max_length=255, blank=True)
+    raw_params = models.JSONField(default=dict, blank=True)
+    browseable = models.BooleanField(default=True)
+    read_only = models.BooleanField(default=True)
+    guest_ok = models.BooleanField(default=False)
+    drift_state = models.CharField(
+        max_length=30,
+        choices=SambaDriftStateChoices,
+        default=SambaDriftStateChoices.STATE_UNMANAGED,
+    )
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("domain", "name")
+        unique_together = (("domain", "name"),)
+        verbose_name = "Samba Observed Share"
+
+    def __str__(self) -> str:
+        return self.name
+
+    def get_drift_state_color(self) -> str | None:
+        return SambaDriftStateChoices.colors.get(self.drift_state)
+
+    def clean(self) -> None:
+        super().clean()
+        _validate_json_container(
+            self.raw_params,
+            field_name="raw_params",
+            expected_type=dict,
+        )
+        _validate_secret_free_fields(self, "name", "path", "raw_params")
+
+
+class SambaObservedUser(NetBoxModel):
+    """Non-secret Samba directory user metadata observed for operations."""
+
+    domain = models.ForeignKey(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="observed_users",
+    )
+    username = models.CharField(max_length=255)
+    sid = models.CharField(max_length=255, blank=True)
+    enabled = models.BooleanField(default=True)
+    last_logon = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("domain", "username")
+        unique_together = (("domain", "username"),)
+        verbose_name = "Samba Observed User"
+
+    def __str__(self) -> str:
+        return self.username
+
+    def clean(self) -> None:
+        super().clean()
+        _validate_secret_free_fields(self, "username", "sid")
+
+
+class SambaObservedGroup(NetBoxModel):
+    """Samba directory group membership observed for operations."""
+
+    domain = models.ForeignKey(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="observed_groups",
+    )
+    name = models.CharField(max_length=255)
+    sid = models.CharField(max_length=255, blank=True)
+    members = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("domain", "name")
+        unique_together = (("domain", "name"),)
+        verbose_name = "Samba Observed Group"
+
+    def __str__(self) -> str:
+        return self.name
+
+    def clean(self) -> None:
+        super().clean()
+        _validate_json_container(
+            self.members,
+            field_name="members",
+            expected_type=list,
+        )
+        _validate_secret_free_fields(self, "name", "sid", "members")
+
+
+class SambaSession(NetBoxModel):
+    """One live connection reported by ``smbstatus``."""
+
+    domain = models.ForeignKey(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="sessions",
+    )
+    username = models.CharField(max_length=255, blank=True)
+    machine = models.CharField(max_length=255, blank=True)
+    remote_ip = models.GenericIPAddressField(null=True, blank=True)
+    share = models.CharField(max_length=80, blank=True)
+    pid = models.PositiveBigIntegerField()
+    opened_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("domain", "username", "machine", "share", "pid")
+        verbose_name = "Samba Session"
+
+    def __str__(self) -> str:
+        return f"{self.username or 'anonymous'} on {self.share or self.machine}"
+
+    def clean(self) -> None:
+        super().clean()
+        _validate_secret_free_fields(self, "username", "machine", "remote_ip", "share")
+
+
+class SambaSyncRun(NetBoxModel):
+    """Audit record for one reconciler collection and fold operation."""
+
+    domain = models.ForeignKey(
+        to="netbox_fileserver.SambaDomain",
+        on_delete=models.CASCADE,
+        related_name="sync_runs",
+    )
+    started = models.DateTimeField(default=timezone.now)
+    finished = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(
+        max_length=30,
+        choices=SambaSyncStatusChoices,
+        default=SambaSyncStatusChoices.STATUS_RUNNING,
+    )
+    rpc_execution_ids = models.JSONField(default=list, blank=True)
+    error_message = models.TextField(blank=True)
+
+    class Meta:
+        app_label = "netbox_fileserver"
+        ordering = ("-started",)
+        verbose_name = "Samba Sync Run"
+
+    def __str__(self) -> str:
+        return f"{self.domain} sync {self.pk or 'new'}"
+
+    def get_status_color(self) -> str | None:
+        return SambaSyncStatusChoices.colors.get(self.status)
+
+    def clean(self) -> None:
+        super().clean()
+        if self.started and self.finished and self.finished < self.started:
+            raise ValidationError(
+                {"finished": "Sync run finish time cannot be earlier than its start time."}
+            )
+        _validate_json_container(
+            self.rpc_execution_ids,
+            field_name="rpc_execution_ids",
+            expected_type=list,
+        )
+        _validate_positive_integer_list(
+            self.rpc_execution_ids,
+            field_name="rpc_execution_ids",
+        )
+        _validate_secret_free_fields(self, "rpc_execution_ids", "error_message")

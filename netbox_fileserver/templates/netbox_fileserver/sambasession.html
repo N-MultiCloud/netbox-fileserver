@@ -1,0 +1,23 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Samba Session</h2>
+      <table class="table table-hover attr-table">
+        <tr><th scope="row">Domain</th><td>{{ object.domain|linkify }}</td></tr>
+        <tr><th scope="row">Username</th><td>{{ object.username|placeholder }}</td></tr>
+        <tr><th scope="row">Machine</th><td>{{ object.machine|placeholder }}</td></tr>
+        <tr><th scope="row">Remote IP</th><td>{{ object.remote_ip|placeholder }}</td></tr>
+        <tr><th scope="row">Share</th><td>{{ object.share|placeholder }}</td></tr>
+        <tr><th scope="row">PID</th><td>{{ object.pid }}</td></tr>
+        <tr><th scope="row">Opened</th><td>{{ object.opened_at|placeholder }}</td></tr>
+      </table>
+    </div>
+    {% include 'inc/panels/custom_fields.html' %}
+    {% include 'inc/panels/tags.html' %}
+  </div>
+</div>
+{% endblock content %}

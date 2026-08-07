@@ -26,20 +26,22 @@ NetBox 4.5.8 and 4.6.x while the plugin advertises 4.5 compatibility.
 netbox_fileserver/
 ├── __init__.py           NetBoxFileServerConfig (base_url="fileserver", required_plugins=["netbox_nms"])
 ├── choices.py            DeploymentStatusChoices, ACLRoleChoices, SambaFunctionalLevelChoices
-├── models.py             FileServerDeployment, FileServerEnrollmentToken, SambaDomain, NextcloudInstance, FileShare, DomainGroup
+├── models.py             6 desired/product models + 8 Samba observed-state models
 ├── filtersets.py         NetBoxModelFilterSet subclasses
 ├── forms.py              NetBoxModelForm + filter forms
 ├── tables.py             NetBoxTable subclasses
 ├── views.py              generic CRUD + bulk edit/delete per model
 ├── urls.py               URL patterns (per-model helper)
 ├── navigation.py         PluginMenu (Deployments / Samba / Nextcloud / Shares)
-├── search.py             SearchIndex registrations (5)
+├── search.py             SearchIndex registrations (11; config bodies excluded)
 ├── template_content.py   Tenant + VirtualMachine detail-page panels
 ├── api/                  DRF serializers, viewsets, NetBoxRouter
 ├── graphql/              strawberry_django types + schema
 ├── migrations/0001_initial.py
 ├── migrations/0002_fileserverenrollmenttoken.py
+├── migrations/0003_samba_observed_state.py
 ├── docs/enrollment.md    Enrollment token + pending-approval API contract
+├── docs/samba-observed-state.md  Observed-state model/API/UI/security contract
 └── templates/netbox_fileserver/…   flat detail templates + inc/ panels
 ```
 
@@ -74,17 +76,28 @@ define this integration surface are vendored at
    import `netbox_nms.encryption` here.
 2. **Observed fields are reconciler-written**:
    `NextcloudInstance.version`, `FileShare.nc_mount_id` / `notify_active`,
-   `SambaDomain.ldaps_cert_expiry`, and `NextcloudInstance.ldap_config_id`.
-   They are API-writable (not read-only) and omitted from the create/edit forms.
-   `FileServerDeployment.status` is writable only through the `approve` action
-   or the `File Server Reconcilers` service-account API path.
-3. **End users are NOT modeled** — only `DomainGroup` (ACLs reference groups).
-   Passwords / per-user churn stay in AD.
+   `SambaDomain.ldaps_cert_expiry`, `NextcloudInstance.ldap_config_id`, and every
+   field on `SambaServerState`, `SambaConfigFile`, `SambaConfigSnapshot`,
+   `SambaObservedShare`, `SambaObservedUser`, `SambaObservedGroup`,
+   `SambaSession`, and `SambaSyncRun`. They are API-writable (not read-only) and
+   omitted from operator forms. `FileServerDeployment.status` is writable only
+   through the `approve` action or the `File Server Reconcilers` service-account
+   API path.
+3. **Desired end users are NOT modeled** — `DomainGroup` is the desired ACL
+   identity. `SambaObservedUser` is a non-secret read-side mirror, not a NetBox
+   user. Passwords, hashes, keys, ciphertext, and credentials never belong in
+   its schema or payloads.
 4. **No** `eval`, `exec`, `os.system`, `pickle.loads`, `innerHTML`,
    `dangerouslySetInnerHTML` (security-guidance policy; enforced by
    `tests/test_static_contract.py`).
-5. The hand-written `migrations/0001_initial.py` must stay in sync with
-   `models.py` (choices + validators are inlined to keep `makemigrations` clean).
+5. The hand-written migrations must stay in sync with `models.py` (choices +
+   validators are inlined to keep `makemigrations` clean). Samba observed-state
+   models live in `0003_samba_observed_state.py`, depending only on plugin leaf
+   `0002_fileserverenrollmenttoken`.
+6. Every plugin GraphQL model type must inherit
+   `netbox.graphql.types.NetBoxObjectType`. Its `get_queryset()` implementation
+   calls `queryset.restrict(user, "view")`; a plain Strawberry type silently
+   bypasses NetBox object-level permissions.
 
 ## NMS stack integration
 

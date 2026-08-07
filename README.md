@@ -2,9 +2,10 @@
 
 NetBox plugin that models the N-MultiCloud **File Server product** — a managed
 **Samba AD/DC (SMB)** + **Nextcloud (Web Drive)** environment per customer — as
-**NetBox desired state**. NetBox's PostgreSQL database is the source of truth for
-the infrastructure objects; an external **NMS file-server backend** reconciles
-Proxmox/Samba/Nextcloud to match, and writes the observed status back.
+**NetBox desired state**, plus the Samba state observed by the reconciler.
+NetBox's PostgreSQL database is the source of truth for the infrastructure
+objects; an external **NMS file-server backend** reconciles
+Proxmox/Samba/Nextcloud to match and refreshes the observed-state inventory.
 
 This is the same pattern as `netbox-proxbox`, one layer up the stack:
 
@@ -20,7 +21,15 @@ This is the same pattern as `netbox-proxbox`, one layer up the stack:
 | `SambaDomain` | The Samba AD/DC (`realm`, `netbios_name`, DC VM/IP, observed `ldaps_cert_expiry`). |
 | `NextcloudInstance` | The Nextcloud instance (VM/IP, observed `version`, `ldap_config_id`). |
 | `FileShare` | **The integration object** — one row describes both the SMB share (path, `acl_spec`, and the `snapshots_enabled`/`recycle_enabled` Samba VFS toggles) and its Nextcloud external-storage mount (`nc_mount_*`, observed `notify_active`). |
-| `DomainGroup` | AD groups referenced by share ACLs, so `acl_spec` validates against real groups. End users are **not** modeled — passwords/user churn stay in AD. |
+| `DomainGroup` | AD groups referenced by share ACLs, so `acl_spec` validates against real groups. Desired end users are **not** modeled — passwords/user churn stay in AD. |
+| `SambaServerState` | One-to-one observed Samba version, systemd unit states, config digest, `testparm` result, and observation time for a domain. |
+| `SambaConfigFile` | Last fetched non-secret content and metadata for an actual Samba config file; unique by domain and path. |
+| `SambaConfigSnapshot` | Point-in-time JSON archive of a domain's non-secret config file set for diff and rollback workflows. |
+| `SambaObservedShare` | Effective share configuration reported by Samba, including raw parameters and desired-vs-observed `drift_state`. |
+| `SambaObservedUser` | Non-secret directory observability (`username`, SID, enabled state, last logon); not a NetBox user or desired identity. |
+| `SambaObservedGroup` | Observed Samba group name, SID, and JSON member list. |
+| `SambaSession` | Live `smbstatus` session data: user, client, address, share, PID, and open time. |
+| `SambaSyncRun` | Audit record for one collection run, including status, RPC execution IDs, timing, and sanitized error text. |
 
 All models subclass `NetBoxModel`, so change-logging, custom fields, tags,
 journaling, and **event rules/webhooks** work natively — the webhook is the
@@ -35,8 +44,14 @@ reconciliation trigger.
    are returned once on mint and are never persisted, and the stored hash is not
    exposed through search, REST, GraphQL, or the UI. Ciphertext/secrets live in
    the reconciler's ops store or Vault.
-3. **AD is authoritative for identities/passwords** (runtime). NetBox models the
-   infrastructure (domains, instances, shares, groups), not end users.
+3. **AD is authoritative for identities/passwords** (runtime). NetBox does not
+   manage desired end users. `SambaObservedUser` is a read-side operational
+   mirror and can never hold passwords, hashes, keys, ciphertext, or credentials.
+4. **Observed Samba rows are reconciler-owned.** Their fields are writable over
+   the API for reconciliation but are absent from operator create/edit and
+   bulk-edit forms (only NetBox tags remain editable in those forms).
+5. **GraphQL honors NetBox object permissions.** Every plugin model type extends
+   `NetBoxObjectType`, which restricts querysets to objects the caller may view.
 
 ## REST API
 
@@ -54,6 +69,14 @@ Endpoints are served at `/api/plugins/fileserver/`:
 - `nextcloud-instances/`
 - `shares/`
 - `domain-groups/`
+- `samba-server-states/`
+- `samba-config-files/`
+- `samba-config-snapshots/`
+- `samba-observed-shares/`
+- `samba-observed-users/`
+- `samba-observed-groups/`
+- `samba-sessions/`
+- `samba-sync-runs/`
 
 The reconciler reads desired state from these endpoints and PATCHes observed
 fields back. Deployment `status` is writable only for the `File Server
@@ -61,7 +84,9 @@ Reconcilers` service-account group; tenant/admin approval uses
 `deployments/{id}/approve/`.
 
 See [docs/enrollment.md](docs/enrollment.md) for the enrollment token and
-pending-approval lifecycle contract.
+pending-approval lifecycle contract. See
+[docs/samba-observed-state.md](docs/samba-observed-state.md) for the observed
+model, API, UI, GraphQL, search, and write-ownership contract.
 
 ## Requirements
 

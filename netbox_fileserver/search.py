@@ -6,6 +6,12 @@ from .models import (
     FileShare,
     NextcloudInstance,
     SambaDomain,
+    SambaObservedGroup,
+    SambaObservedShare,
+    SambaObservedUser,
+    SambaServerState,
+    SambaSession,
+    SambaSyncRun,
 )
 
 
@@ -55,3 +61,52 @@ class DomainGroupIndex(SearchIndex):
         ("name", 100),
         ("description", 500),
     )
+
+
+@register_search
+class SambaServerStateIndex(SearchIndex):
+    model = SambaServerState
+    fields = (("version", 200),)
+
+
+@register_search
+class SambaObservedShareIndex(SearchIndex):
+    model = SambaObservedShare
+    fields = (
+        ("name", 100),
+        ("path", 200),
+    )
+
+
+@register_search
+class SambaObservedUserIndex(SearchIndex):
+    model = SambaObservedUser
+    fields = (
+        ("username", 100),
+        ("sid", 200),
+    )
+
+
+@register_search
+class SambaObservedGroupIndex(SearchIndex):
+    model = SambaObservedGroup
+    fields = (
+        ("name", 100),
+        ("sid", 200),
+    )
+
+
+@register_search
+class SambaSessionIndex(SearchIndex):
+    model = SambaSession
+    fields = (
+        ("username", 100),
+        ("machine", 200),
+        ("share", 300),
+    )
+
+
+@register_search
+class SambaSyncRunIndex(SearchIndex):
+    model = SambaSyncRun
+    fields = (("status", 200),)

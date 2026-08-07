@@ -36,6 +36,19 @@ menu = PluginMenu(
             ),
         ),
         (
+            "Samba Observed",
+            (
+                _item("sambaserverstate", "Server States", add=False),
+                _item("sambaconfigfile", "Config Files", add=False),
+                _item("sambaconfigsnapshot", "Config Snapshots", add=False),
+                _item("sambaobservedshare", "Observed Shares", add=False),
+                _item("sambaobserveduser", "Observed Users", add=False),
+                _item("sambaobservedgroup", "Observed Groups", add=False),
+                _item("sambasession", "Sessions", add=False),
+                _item("sambasyncrun", "Sync Runs", add=False),
+            ),
+        ),
+        (
             "Nextcloud",
             (_item("nextcloudinstance", "Nextcloud Instances"),),
         ),

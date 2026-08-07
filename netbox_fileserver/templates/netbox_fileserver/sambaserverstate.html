@@ -1,0 +1,35 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Samba Server State</h2>
+      <table class="table table-hover attr-table">
+        <tr><th scope="row">Domain</th><td>{{ object.domain|linkify }}</td></tr>
+        <tr><th scope="row">Version</th><td>{{ object.version|placeholder }}</td></tr>
+        <tr><th scope="row">Config SHA-256</th><td><code>{{ object.config_sha256|placeholder }}</code></td></tr>
+        <tr><th scope="row">Testparm valid</th><td>{{ object.testparm_ok|yesno:"Yes,No" }}</td></tr>
+        <tr><th scope="row">Observed</th><td>{{ object.observed_at|placeholder }}</td></tr>
+      </table>
+    </div>
+    {% include 'inc/panels/custom_fields.html' %}
+    {% include 'inc/panels/tags.html' %}
+  </div>
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Systemd Units</h2>
+      <table class="table table-hover attr-table">
+        <thead><tr><th>Unit</th><th>Active</th><th>Sub</th><th>Unit file</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">smbd</th><td>{{ object.smbd_active_state|placeholder }}</td><td>{{ object.smbd_sub_state|placeholder }}</td><td>{{ object.smbd_unit_file_state|placeholder }}</td></tr>
+          <tr><th scope="row">nmbd</th><td>{{ object.nmbd_active_state|placeholder }}</td><td>{{ object.nmbd_sub_state|placeholder }}</td><td>{{ object.nmbd_unit_file_state|placeholder }}</td></tr>
+          <tr><th scope="row">winbind</th><td>{{ object.winbind_active_state|placeholder }}</td><td>{{ object.winbind_sub_state|placeholder }}</td><td>{{ object.winbind_unit_file_state|placeholder }}</td></tr>
+          <tr><th scope="row">samba-ad-dc</th><td>{{ object.samba_ad_dc_active_state|placeholder }}</td><td>{{ object.samba_ad_dc_sub_state|placeholder }}</td><td>{{ object.samba_ad_dc_unit_file_state|placeholder }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock content %}

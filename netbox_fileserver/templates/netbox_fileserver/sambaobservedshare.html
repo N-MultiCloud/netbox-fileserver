@@ -1,0 +1,29 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Samba Observed Share</h2>
+      <table class="table table-hover attr-table">
+        <tr><th scope="row">Domain</th><td>{{ object.domain|linkify }}</td></tr>
+        <tr><th scope="row">Name</th><td>{{ object.name }}</td></tr>
+        <tr><th scope="row">Path</th><td>{{ object.path|placeholder }}</td></tr>
+        <tr><th scope="row">Browseable</th><td>{{ object.browseable|yesno:"Yes,No" }}</td></tr>
+        <tr><th scope="row">Read only</th><td>{{ object.read_only|yesno:"Yes,No" }}</td></tr>
+        <tr><th scope="row">Guest access</th><td>{{ object.guest_ok|yesno:"Yes,No" }}</td></tr>
+        <tr><th scope="row">Drift</th><td><span class="badge text-bg-{{ object.get_drift_state_color }}">{{ object.get_drift_state_display }}</span></td></tr>
+      </table>
+    </div>
+    {% include 'inc/panels/custom_fields.html' %}
+    {% include 'inc/panels/tags.html' %}
+  </div>
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header">Raw Parameters</h2>
+      <div class="card-body"><pre class="mb-0 text-wrap">{{ object.raw_params|json }}</pre></div>
+    </div>
+  </div>
+</div>
+{% endblock content %}

@@ -60,3 +60,35 @@ class SambaFunctionalLevelChoices(ChoiceSet):
         (LEVEL_2012_R2, "2012 R2"),
         (LEVEL_2016, "2016"),
     ]
+
+
+class SambaDriftStateChoices(ChoiceSet):
+    """Comparison state for an observed share and desired ``FileShare``."""
+
+    STATE_IN_SYNC = "in_sync"
+    STATE_DRIFTED = "drifted"
+    STATE_MISSING_ON_HOST = "missing_on_host"
+    STATE_UNMANAGED = "unmanaged"
+
+    CHOICES = [
+        (STATE_IN_SYNC, "In sync", "green"),
+        (STATE_DRIFTED, "Drifted", "orange"),
+        (STATE_MISSING_ON_HOST, "Missing on host", "red"),
+        (STATE_UNMANAGED, "Unmanaged", "gray"),
+    ]
+
+
+class SambaSyncStatusChoices(ChoiceSet):
+    """Lifecycle of one observed-state collection run."""
+
+    STATUS_RUNNING = "running"
+    STATUS_SUCCEEDED = "succeeded"
+    STATUS_PARTIAL = "partial"
+    STATUS_FAILED = "failed"
+
+    CHOICES = [
+        (STATUS_RUNNING, "Running", "blue"),
+        (STATUS_SUCCEEDED, "Succeeded", "green"),
+        (STATUS_PARTIAL, "Partial", "orange"),
+        (STATUS_FAILED, "Failed", "red"),
+    ]

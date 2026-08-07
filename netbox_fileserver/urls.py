@@ -8,7 +8,15 @@ from .models import (
     FileServerEnrollmentToken,
     FileShare,
     NextcloudInstance,
+    SambaConfigFile,
+    SambaConfigSnapshot,
     SambaDomain,
+    SambaObservedGroup,
+    SambaObservedShare,
+    SambaObservedUser,
+    SambaServerState,
+    SambaSession,
+    SambaSyncRun,
 )
 
 app_name = "netbox_fileserver"
@@ -24,11 +32,19 @@ def _model_urls(
     bulk_edit_view,
     bulk_delete_view,
     model,
+    *,
+    include_add=True,
 ):
-    """Standard NetBox object URL set for one model."""
-    return [
+    """Standard NetBox object URL set for one model.
+
+    ``include_add=False`` omits the ``<slug>/add/`` route for models whose
+    rows are exclusively reconciler-written (see Critical Rule 2 in
+    CLAUDE.md): their forms only expose ``tags``, so a UI-driven create would
+    fail ``full_clean()`` on the omitted required fields. Editing an existing
+    row and bulk delete remain available.
+    """
+    urls = [
         path(f"{slug}/", list_view.as_view(), name=f"{name}_list"),
-        path(f"{slug}/add/", edit_view.as_view(), name=f"{name}_add"),
         path(f"{slug}/edit/", bulk_edit_view.as_view(), name=f"{name}_bulk_edit"),
         path(f"{slug}/delete/", bulk_delete_view.as_view(), name=f"{name}_bulk_delete"),
         path(f"{slug}/<int:pk>/", detail_view.as_view(), name=name),
@@ -47,6 +63,9 @@ def _model_urls(
             kwargs={"model": model},
         ),
     ]
+    if include_add:
+        urls.insert(1, path(f"{slug}/add/", edit_view.as_view(), name=f"{name}_add"))
+    return urls
 
 
 urlpatterns = [
@@ -115,5 +134,101 @@ urlpatterns = [
         views.DomainGroupBulkEditView,
         views.DomainGroupBulkDeleteView,
         DomainGroup,
+    ),
+    *_model_urls(
+        "samba-server-states",
+        "sambaserverstate",
+        views.SambaServerStateListView,
+        views.SambaServerStateView,
+        views.SambaServerStateEditView,
+        views.SambaServerStateDeleteView,
+        views.SambaServerStateBulkEditView,
+        views.SambaServerStateBulkDeleteView,
+        SambaServerState,
+        include_add=False,
+    ),
+    *_model_urls(
+        "samba-config-files",
+        "sambaconfigfile",
+        views.SambaConfigFileListView,
+        views.SambaConfigFileView,
+        views.SambaConfigFileEditView,
+        views.SambaConfigFileDeleteView,
+        views.SambaConfigFileBulkEditView,
+        views.SambaConfigFileBulkDeleteView,
+        SambaConfigFile,
+        include_add=False,
+    ),
+    *_model_urls(
+        "samba-config-snapshots",
+        "sambaconfigsnapshot",
+        views.SambaConfigSnapshotListView,
+        views.SambaConfigSnapshotView,
+        views.SambaConfigSnapshotEditView,
+        views.SambaConfigSnapshotDeleteView,
+        views.SambaConfigSnapshotBulkEditView,
+        views.SambaConfigSnapshotBulkDeleteView,
+        SambaConfigSnapshot,
+        include_add=False,
+    ),
+    *_model_urls(
+        "samba-observed-shares",
+        "sambaobservedshare",
+        views.SambaObservedShareListView,
+        views.SambaObservedShareView,
+        views.SambaObservedShareEditView,
+        views.SambaObservedShareDeleteView,
+        views.SambaObservedShareBulkEditView,
+        views.SambaObservedShareBulkDeleteView,
+        SambaObservedShare,
+        include_add=False,
+    ),
+    *_model_urls(
+        "samba-observed-users",
+        "sambaobserveduser",
+        views.SambaObservedUserListView,
+        views.SambaObservedUserView,
+        views.SambaObservedUserEditView,
+        views.SambaObservedUserDeleteView,
+        views.SambaObservedUserBulkEditView,
+        views.SambaObservedUserBulkDeleteView,
+        SambaObservedUser,
+        include_add=False,
+    ),
+    *_model_urls(
+        "samba-observed-groups",
+        "sambaobservedgroup",
+        views.SambaObservedGroupListView,
+        views.SambaObservedGroupView,
+        views.SambaObservedGroupEditView,
+        views.SambaObservedGroupDeleteView,
+        views.SambaObservedGroupBulkEditView,
+        views.SambaObservedGroupBulkDeleteView,
+        SambaObservedGroup,
+        include_add=False,
+    ),
+    *_model_urls(
+        "samba-sessions",
+        "sambasession",
+        views.SambaSessionListView,
+        views.SambaSessionView,
+        views.SambaSessionEditView,
+        views.SambaSessionDeleteView,
+        views.SambaSessionBulkEditView,
+        views.SambaSessionBulkDeleteView,
+        SambaSession,
+        include_add=False,
+    ),
+    *_model_urls(
+        "samba-sync-runs",
+        "sambasyncrun",
+        views.SambaSyncRunListView,
+        views.SambaSyncRunView,
+        views.SambaSyncRunEditView,
+        views.SambaSyncRunDeleteView,
+        views.SambaSyncRunBulkEditView,
+        views.SambaSyncRunBulkDeleteView,
+        SambaSyncRun,
+        include_add=False,
     ),
 ]
