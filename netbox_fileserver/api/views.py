@@ -1,5 +1,3 @@
-from datetime import timedelta
-
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.utils import timezone
@@ -224,22 +222,34 @@ class SambaDomainViewSet(NetBoxModelViewSet):
                 raise PermissionDenied(f"{permission} permission is required.")
 
         from ..jobs import SAMBA_SYNC_JOB_TIMEOUT
-        from ..samba_sync import _finish_sync_run
+        from ..samba_sync import _finish_sync_run, is_sync_run_stale
 
         with transaction.atomic():
             locked_domain = SambaDomain.objects.select_for_update().get(pk=domain.pk)
-            running = SambaSyncRun.objects.select_for_update().filter(
-                domain=locked_domain,
-                status="running",
-            ).first()
+            running = (
+                SambaSyncRun.objects.select_for_update()
+                .select_related("job")
+                .filter(domain=locked_domain, status="running")
+                .first()
+            )
             if running is not None:
-                # A running row whose job could not have still been within its
-                # own RQ timeout is abandoned (crashed worker, dead process
-                # between row-commit and enqueue, etc.) rather than in
-                # progress. Reconcile it to a terminal state instead of
-                # 409ing forever with no operator recovery path.
-                stale_before = timezone.now() - timedelta(seconds=SAMBA_SYNC_JOB_TIMEOUT)
-                if running.started > stale_before:
+                # The NetBox core.Job linked to the run -- not the row's own
+                # wall-clock age -- is the source of truth for whether it is
+                # genuinely stuck: Job.started is only stamped once RQ
+                # execution actually begins, so a job still queued behind
+                # other domains' syncs is never mistaken for an abandoned
+                # run, while a job that ended without closing the run (or
+                # whose execution has outrun its own timeout) is reconciled
+                # to a terminal state instead of 409ing forever with no
+                # operator recovery path.
+                stale = is_sync_run_stale(
+                    job_status=getattr(running.job, "status", None),
+                    job_started=getattr(running.job, "started", None),
+                    run_started=running.started,
+                    now=timezone.now(),
+                    job_timeout_seconds=SAMBA_SYNC_JOB_TIMEOUT,
+                )
+                if not stale:
                     return Response(
                         {"detail": "A Samba sync is already running for this domain."},
                         status=http_status.HTTP_409_CONFLICT,
@@ -248,9 +258,9 @@ class SambaDomainViewSet(NetBoxModelViewSet):
                     running,
                     status="failed",
                     errors=[
-                        "Sync run exceeded its maximum runtime without reaching a "
-                        "terminal status; reconciled as failed so a new sync "
-                        "could start."
+                        "Sync run's job ended without reaching a terminal sync "
+                        "status, or exceeded its maximum runtime; reconciled as "
+                        "failed so a new sync could start."
                     ],
                 )
             sync_run = SambaSyncRun(domain=locked_domain)
@@ -281,11 +291,16 @@ class SambaDomainViewSet(NetBoxModelViewSet):
                 status=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
+        job_pk = getattr(job, "pk", None) or getattr(job, "id", None)
+        if job_pk is not None:
+            sync_run.job_id = job_pk
+            sync_run.save(update_fields=["job", "last_updated"])
+
         payload = {
             "detail": "Samba sync job enqueued.",
             "domain": domain.pk,
             "sync_run": sync_run.pk,
-            "job": getattr(job, "pk", None) or getattr(job, "id", None),
+            "job": job_pk,
         }
         if hasattr(job, "get_absolute_url"):
             payload["url"] = job.get_absolute_url()

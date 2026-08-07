@@ -518,6 +518,7 @@ class SambaSyncRunSerializer(SecretSafeObservedSerializerMixin, NetBoxModelSeria
             "started",
             "finished",
             "status",
+            "job",
             "rpc_execution_ids",
             "error_message",
             "tags",

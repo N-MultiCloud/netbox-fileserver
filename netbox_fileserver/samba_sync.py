@@ -19,7 +19,7 @@ import re
 import shlex
 import time
 from collections.abc import Callable, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
 from netbox_rpc.constants import (
@@ -38,6 +38,14 @@ from netbox_rpc.constants import (
 RPC_TERMINAL_STATUSES = frozenset(
     {"succeeded", "failed", "cancelled", "rejected", "expired"}
 )
+# Mirrors core.choices.JobStatusChoices; duplicated as plain strings here so
+# this module (and its DB-free unit tests) do not have to import NetBox core.
+JOB_STATUS_RUNNING = "running"
+JOB_TERMINAL_STATUSES = frozenset({"completed", "errored", "failed"})
+# Grace period for the narrow window between a SambaSyncRun row being created
+# and its core.Job being enqueued and linked back onto the row -- a run with
+# no linked job yet is only stale if it has sat unassigned longer than this.
+SAMBA_SYNC_UNASSIGNED_JOB_GRACE_SECONDS = 30
 SAMBA_COLLECT_PROCEDURES = (
     SAMBA_1_VERSION,
     SAMBA_1_SERVICE_STATUS,
@@ -110,6 +118,16 @@ class SambaIntentDispatchError(RuntimeError):
     def __init__(self, message: str, executions: Sequence[object]) -> None:
         super().__init__(message)
         self.executions = list(executions)
+
+
+class SambaResultTruncated(RuntimeError):
+    """A collect-state RPC result was cut short by netbox-rpc's size guard.
+
+    Raised instead of returning partial model instances so the caller's
+    existing fold-error handling downgrades the owning procedure's status to
+    ``fold_failed``, which keeps ``replacement_plan()`` from replacing any
+    collection built from the truncated payload -- not just shares.
+    """
 
 
 def _runtime_model_module():
@@ -550,6 +568,17 @@ def fold_result(
 
     if procedure_name == SAMBA_1_CONFIG_READ:
         raw_content = str(result.get("content") or "")
+        # A truncated body was cut mid-section by netbox-rpc's result-size
+        # guard before it ever reaches us. Every collection built from this
+        # payload -- the config file, its snapshot, the config-derived
+        # SambaServerState fields, and any parsed shares -- is unreliable, so
+        # fail the whole procedure closed instead of persisting a partial
+        # parse under a correct-looking digest and byte size.
+        if _is_truncated_rpc_string(raw_content):
+            raise SambaResultTruncated(
+                f"{procedure_name}: config_read content was truncated by the "
+                "RPC result-size guard"
+            )
         content = redact_secret_material(
             raw_content,
             validator=validator,
@@ -590,24 +619,26 @@ def fold_result(
                 config_sha256=digest,
             ),
         ]
-        # A truncated body was cut mid-section by netbox-rpc's result-size
-        # limit before it ever reaches us; parsing it would yield share rows
-        # with incomplete raw_params. Skip share extraction so _persist_shares
-        # falls back to preserving the prior observed share rows instead of
-        # overwriting them with a partial parse.
-        if not _is_truncated_rpc_string(raw_content):
-            instances.extend(
-                _share_models_from_config(
-                    content,
-                    model_classes=model_classes,
-                    validator=validator,
-                    sensitive_name=sensitive_name,
-                )
+        instances.extend(
+            _share_models_from_config(
+                content,
+                model_classes=model_classes,
+                validator=validator,
+                sensitive_name=sensitive_name,
             )
+        )
         return instances
 
     if procedure_name == SAMBA_1_CONFIG_TEST:
         raw_stdout = result.get("stdout")
+        # Same rationale as config_read: a truncated testparm capture makes
+        # both the server-state testparm_ok field and any share parameters
+        # derived from stdout unreliable.
+        if _is_truncated_rpc_string(raw_stdout):
+            raise SambaResultTruncated(
+                f"{procedure_name}: config_test stdout was truncated by the "
+                "RPC result-size guard"
+            )
         stdout = redact_secret_material(
             raw_stdout,
             validator=validator,
@@ -620,15 +651,14 @@ def fold_result(
                 testparm_ok=bool(result.get("valid")),
             )
         ]
-        if not _is_truncated_rpc_string(raw_stdout):
-            instances.extend(
-                _share_models_from_config(
-                    stdout,
-                    model_classes=model_classes,
-                    validator=validator,
-                    sensitive_name=sensitive_name,
-                )
+        instances.extend(
+            _share_models_from_config(
+                stdout,
+                model_classes=model_classes,
+                validator=validator,
+                sensitive_name=sensitive_name,
             )
+        )
         return instances
 
     if procedure_name == SAMBA_1_LIST_SHARES:
@@ -825,6 +855,43 @@ def classify_sync_status(
     if complete and not has_dispatch_error and not has_fold_error:
         return "succeeded"
     return "partial" if succeeded else "failed"
+
+
+def is_sync_run_stale(
+    *,
+    job_status: str | None,
+    job_started: datetime | None,
+    run_started: datetime,
+    now: datetime,
+    job_timeout_seconds: float,
+    unassigned_grace_seconds: float = SAMBA_SYNC_UNASSIGNED_JOB_GRACE_SECONDS,
+) -> bool:
+    """Decide whether a ``running`` SambaSyncRun is abandoned and reconcilable.
+
+    ``job_status``/``job_started`` come from the run's linked ``core.Job``, not
+    from the run row itself: NetBox only stamps ``Job.started`` when RQ
+    execution actually begins, so it -- unlike the row's own ``started``
+    timestamp, set at creation time -- distinguishes "still queued behind
+    other work" from "the worker that owned this run died mid-execution".
+
+    * No linked job yet (``job_status is None``) is the narrow race between
+      row creation and job enqueue/link -- stale only past a short grace
+      period, never immediately.
+    * A terminal job (completed/errored/failed) means execution ended without
+      correctly closing the run -- always reconcilable.
+    * A running job is only stale once its own execution time exceeds the
+      job's timeout -- queue wait time never counts against it.
+    * A still-queued job (pending/scheduled) is never stale, regardless of how
+      long the row has existed -- it has not started running yet.
+    """
+
+    if job_status is None:
+        return now - run_started > timedelta(seconds=unassigned_grace_seconds)
+    if job_status in JOB_TERMINAL_STATUSES:
+        return True
+    if job_status == JOB_STATUS_RUNNING and job_started is not None:
+        return now - job_started > timedelta(seconds=job_timeout_seconds)
+    return False
 
 
 def dispatch_collect_state(domain: object, user: object) -> list[object]:

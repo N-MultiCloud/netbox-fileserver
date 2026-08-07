@@ -693,8 +693,14 @@ def test_samba_observed_migration_is_leaf_scoped_and_model_synced():
         "custom_field_data": "JSONField",
         "tags": "TaggableManager",
     }
+    # SambaSyncRun.job was added by the later, non-leaf 0004 migration (see
+    # test_sambasyncrun_job_migration_matches_the_model below), so this leaf
+    # migration's frozen CreateModel state predates it.
+    fields_added_after_this_migration = {"SambaSyncRun": {"job"}}
     for model_name in SAMBA_OBSERVED_MODEL_FIELDS:
         expected = inherited_fields | _model_field_types(model_name)
+        for later_field in fields_added_after_this_migration.get(model_name, ()):
+            expected.pop(later_field, None)
         assert migration_models[model_name] == expected, model_name
 
     assert src.count("on_delete=django.db.models.deletion.CASCADE") == 8
@@ -702,6 +708,39 @@ def test_samba_observed_migration_is_leaf_scoped_and_model_synced():
     assert src.count("models.OneToOneField(") == 1
     assert src.count("models.ForeignKey(") == 7
     assert src.count("migrations.CreateModel(") == 8
+
+
+def test_sambasyncrun_job_migration_matches_the_model():
+    path = PKG / "migrations" / "0004_sambasyncrun_job.py"
+    src = path.read_text(encoding="utf-8")
+    tree = ast.parse(src, filename=str(path))
+    migration_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "Migration"
+    )
+    dependencies = next(
+        node
+        for node in migration_class.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "dependencies"
+            for target in node.targets
+        )
+    )
+    assert ast.literal_eval(dependencies.value) == [
+        ("netbox_fileserver", "0003_samba_observed_state"),
+        ("core", "0011_move_objectchange"),
+    ]
+    assert src.count("migrations.AddField(") == 1
+    assert 'model_name="sambasyncrun"' in src
+    assert 'name="job"' in src
+    assert "models.ForeignKey(" in src
+    assert "on_delete=django.db.models.deletion.SET_NULL" in src
+    assert 'to="core.job"' in src
+    assert "null=True" in src
+    assert "blank=True" in src
+    assert _model_field_types("SambaSyncRun")["job"] == "ForeignKey"
 
 
 def test_observed_sha256_fields_are_validated_in_models_and_migration():
@@ -843,6 +882,7 @@ SAMBA_OBSERVED_MODEL_FIELDS = {
         "started",
         "finished",
         "status",
+        "job",
         "rpc_execution_ids",
         "error_message",
     ),

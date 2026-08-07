@@ -60,6 +60,14 @@ class SambaSyncJob(JobRunner):
         **_kwargs: object,
     ) -> None:
         sync_run = SambaSyncRun.objects.select_related("domain").get(pk=sync_run_pk)
+        if sync_run.status != "running":
+            # The stale-recovery path in api/views.py's sync() action already
+            # reconciled this run to a terminal status (its linked core.Job
+            # died or outran its timeout, and a new run took its place)
+            # before this straggler execution got a worker slot. Folding
+            # results into an already-terminal run would race the writer
+            # that superseded it, so bail out without touching it further.
+            return
         domain = SambaDomain.objects.select_related("deployment").get(pk=domain_pk)
         user = get_user_model().objects.filter(pk=requester_pk).first()
         if user is None:

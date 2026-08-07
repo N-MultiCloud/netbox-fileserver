@@ -6,6 +6,7 @@ import importlib.util
 import json
 import sys
 import types
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -214,7 +215,7 @@ def test_redaction_preserves_non_sensitive_continued_assignment():
     assert "workgroup = EXAMPLE" in redacted
 
 
-def test_config_read_truncated_content_skips_share_parsing():
+def test_config_read_truncated_content_fails_the_whole_collection():
     result = {
         "path": "/etc/samba/smb.conf",
         "sha256": "deadbeef",
@@ -223,25 +224,123 @@ def test_config_read_truncated_content_skips_share_parsing():
             "...[truncated]"
         ),
     }
-    instances = SYNC.fold_result(
-        "service.samba.1.config_read", result, model_classes=MODEL_CLASSES
-    )
-    classes = {type(instance).__name__ for instance in instances}
-    assert "SambaObservedShare" not in classes
-    assert "SambaConfigFile" in classes
+    with pytest.raises(SYNC.SambaResultTruncated):
+        SYNC.fold_result(
+            "service.samba.1.config_read", result, model_classes=MODEL_CLASSES
+        )
 
 
-def test_config_test_truncated_stdout_skips_share_parsing():
+def test_config_test_truncated_stdout_fails_the_whole_collection():
     result = {
         "valid": True,
         "stdout": "[Finance]\n  path = /srv/finance...[truncated]",
     }
-    instances = SYNC.fold_result(
-        "service.samba.1.config_test", result, model_classes=MODEL_CLASSES
+    with pytest.raises(SYNC.SambaResultTruncated):
+        SYNC.fold_result(
+            "service.samba.1.config_test", result, model_classes=MODEL_CLASSES
+        )
+
+
+def test_truncated_config_read_is_downgraded_to_fold_failed_and_blocks_replacement():
+    statuses = dict.fromkeys(SYNC.SAMBA_COLLECT_PROCEDURES, "succeeded")
+    statuses["service.samba.1.config_read"] = "fold_failed"
+    plan = SYNC.replacement_plan(statuses)
+    assert plan["config"] is False
+    assert plan["server_state"] is False
+    assert plan["shares"] is True
+    assert SYNC.classify_sync_status(statuses, has_fold_error=True) == "partial"
+
+
+def test_truncated_config_test_is_downgraded_to_fold_failed_and_blocks_replacement():
+    statuses = dict.fromkeys(SYNC.SAMBA_COLLECT_PROCEDURES, "succeeded")
+    statuses["service.samba.1.config_test"] = "fold_failed"
+    plan = SYNC.replacement_plan(statuses)
+    assert plan["server_state"] is False
+    assert plan["shares"] is False
+    assert plan["config"] is True
+    assert SYNC.classify_sync_status(statuses, has_fold_error=True) == "partial"
+
+
+def test_stale_run_with_no_linked_job_is_not_stale_within_grace_period():
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    assert not SYNC.is_sync_run_stale(
+        job_status=None,
+        job_started=None,
+        run_started=now - timedelta(seconds=5),
+        now=now,
+        job_timeout_seconds=360,
     )
-    classes = {type(instance).__name__ for instance in instances}
-    assert "SambaObservedShare" not in classes
-    assert "SambaServerState" in classes
+
+
+def test_stale_run_with_no_linked_job_is_stale_past_grace_period():
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    assert SYNC.is_sync_run_stale(
+        job_status=None,
+        job_started=None,
+        run_started=now - timedelta(seconds=31),
+        now=now,
+        job_timeout_seconds=360,
+    )
+
+
+def test_stale_run_with_terminal_job_is_always_stale():
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    for status in ("completed", "errored", "failed"):
+        assert SYNC.is_sync_run_stale(
+            job_status=status,
+            job_started=now - timedelta(seconds=1),
+            run_started=now - timedelta(seconds=1),
+            now=now,
+            job_timeout_seconds=360,
+        )
+
+
+def test_stale_run_with_pending_or_scheduled_job_is_never_stale_regardless_of_age():
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    for status in ("pending", "scheduled"):
+        assert not SYNC.is_sync_run_stale(
+            job_status=status,
+            job_started=None,
+            run_started=now - timedelta(hours=6),
+            now=now,
+            job_timeout_seconds=360,
+        )
+
+
+def test_stale_run_with_running_job_within_its_own_timeout_is_not_stale():
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    assert not SYNC.is_sync_run_stale(
+        job_status="running",
+        job_started=now - timedelta(seconds=100),
+        run_started=now - timedelta(hours=6),
+        job_timeout_seconds=360,
+        now=now,
+    )
+
+
+def test_stale_run_with_running_job_past_its_own_timeout_is_stale():
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    assert SYNC.is_sync_run_stale(
+        job_status="running",
+        job_started=now - timedelta(seconds=361),
+        run_started=now - timedelta(seconds=361),
+        job_timeout_seconds=360,
+        now=now,
+    )
+
+
+def test_stale_run_with_running_job_queued_a_long_time_before_started_is_not_stale():
+    # A job that sat queued behind other work for a long time before its
+    # execution actually began must not be penalized for queue wait -- only
+    # its own execution time (since job.started) counts against the timeout.
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    assert not SYNC.is_sync_run_stale(
+        job_status="running",
+        job_started=now - timedelta(seconds=10),
+        run_started=now - timedelta(hours=6),
+        job_timeout_seconds=360,
+        now=now,
+    )
 
 
 def _desired(**overrides):

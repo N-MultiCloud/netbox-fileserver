@@ -132,10 +132,11 @@ define this integration surface are vendored at
   version/service/config quartet and shares require both effective config and
   the authoritative share list. Config is redacted and revalidated before
   file/snapshot persistence. Drift is report-only and never auto-remediates.
-  The shared-default-queue topology requires at least two RQ workers to avoid
-  a single-sync deadlock; W concurrent domain syncs need W+1 workers to run in
-  parallel rather than degrade to serialized, timeout-bounded execution (see
-  `docs/samba-observed-state.md`).
+  The shared-default-queue topology requires `W + 1` RQ workers for `W`
+  concurrent domain syncs as a hard capacity requirement, not a tuning knob:
+  under-provisioning does not degrade to serialized execution, it can starve
+  every worker with poll loops and time out all overlapping syncs as
+  failures (see `docs/samba-observed-state.md`).
 - Live Samba sync is pending production registration of the
   `service.samba_1.*` backend handlers. Until that backend promotion lands,
   child executions fail closed as handler-not-registered; fixture-backed fold

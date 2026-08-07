@@ -105,8 +105,10 @@ model, API, UI, GraphQL, search, and write-ownership contract.
 - NetBox 4.5.8 – 4.6.99
 - Python ≥ 3.12
 - `netbox-nms` ≥ 0.1.8, < 0.2.0 (provides the `NMSBackend` connection registry; older releases cannot migrate on NetBox 4.5.x)
-- `netbox-rpc` ≥ 0.1.6, < 0.2.0 (provides the seeded Samba intents, audited
-  execution ledger, and RQ procedure jobs)
+- `netbox-rpc` ≥ 0.1.7, < 0.2.0 (provides the seeded Samba intents, audited
+  execution ledger, and RQ procedure jobs; `FILESERVER_SAMBA_COLLECT_STATE`
+  and `execute_intent()` do not exist at the 0.1.6 tag — see
+  N-MultiCloud/netbox-rpc#219)
 
 Migrations depend only on NetBox core migration nodes present in both NetBox
 4.5.8 and 4.6.x so the plugin can build its migration graph across the
