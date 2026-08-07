@@ -50,6 +50,16 @@ this coupling entirely) lands, deployments must size RQ worker count to
 expected concurrent sync load and treat that sizing as a release
 prerequisite, not an optimization.
 
+As a tripwire against the single-worst-case topology -- a deployment with
+`W + 1` never provisioned at all, which self-starves *every* sync, not just
+overlapping ones -- the `sync` action rejects the request outright with
+`HTTP 503` before creating a `SambaSyncRun` if fewer than
+`jobs.MIN_SAMBA_SYNC_WORKERS` (2) workers are registered on the sync queue.
+This only catches the zero-headroom case; it cannot detect that all
+registered workers are already busy on unrelated jobs, so correct sizing for
+expected concurrent sync load remains a deployment responsibility, not
+something this check fully substitutes for.
+
 ### Fold and replacement ownership
 
 `fold_result(procedure_name, result)` performs no I/O and returns unsaved model

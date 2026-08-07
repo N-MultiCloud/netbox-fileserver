@@ -603,6 +603,29 @@ def test_samba_sync_action_is_permission_gated_and_enqueues_rq_job():
     assert "def fold_result(" in sync_src
 
 
+def test_samba_sync_rejects_when_worker_capacity_is_insufficient():
+    api_src = read("api/views.py")
+    jobs_src = read("jobs.py")
+    assert "def registered_worker_count(" in jobs_src
+    assert "MIN_SAMBA_SYNC_WORKERS" in jobs_src
+    assert "registered_worker_count(SAMBA_SYNC_QUEUE_NAME)" in api_src
+    assert "worker_count < MIN_SAMBA_SYNC_WORKERS" in api_src
+    assert "HTTP_503_SERVICE_UNAVAILABLE" in api_src
+
+
+def test_samba_sync_enqueues_and_links_job_inside_the_same_transaction():
+    api_src = read("api/views.py")
+    # The run's job FK must be set before the enclosing atomic() block
+    # closes, so RQ's transaction.on_commit()-deferred dispatch can never
+    # fire before the row that links the job to its sync run is durably
+    # committed.
+    with_index = api_src.index("with transaction.atomic():")
+    enqueue_index = api_src.index("SambaSyncJob.enqueue(")
+    link_index = api_src.index('sync_run.job_id = job_pk')
+    block_close_index = api_src.index("if enqueue_failed:")
+    assert with_index < enqueue_index < link_index < block_close_index
+
+
 def test_samba_sync_uses_rpc_intent_and_dotted_procedure_constants_only():
     src = read("samba_sync.py")
     assert "from netbox_rpc.constants import (" in src

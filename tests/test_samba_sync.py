@@ -241,6 +241,55 @@ def test_config_test_truncated_stdout_fails_the_whole_collection():
         )
 
 
+def test_status_report_truncated_sessions_fails_the_whole_collection():
+    result = {
+        "sessions": [
+            {"session_id": "1", "pid": 100, "username": "alice"},
+            {"_truncated": True, "remaining": 12},
+        ],
+        "tcons": [],
+    }
+    with pytest.raises(SYNC.SambaResultTruncated):
+        SYNC.fold_result(
+            "service.samba.1.status_report", result, model_classes=MODEL_CLASSES
+        )
+
+
+def test_status_report_truncated_tcons_fails_the_whole_collection():
+    result = {
+        "sessions": [],
+        "tcons": [
+            {"session_id": "1", "pid": 100, "service": "finance"},
+            {"_truncated": True, "remaining": 5},
+        ],
+    }
+    with pytest.raises(SYNC.SambaResultTruncated):
+        SYNC.fold_result(
+            "service.samba.1.status_report", result, model_classes=MODEL_CLASSES
+        )
+
+
+def test_status_report_untruncated_sessions_fold_normally():
+    result = {
+        "sessions": [{"session_id": "1", "pid": 100, "username": "alice"}],
+        "tcons": [],
+    }
+    instances = SYNC.fold_result(
+        "service.samba.1.status_report", result, model_classes=MODEL_CLASSES
+    )
+    assert len(instances) == 1
+
+
+def test_truncated_status_report_is_downgraded_to_fold_failed_and_blocks_replacement():
+    statuses = dict.fromkeys(SYNC.SAMBA_COLLECT_PROCEDURES, "succeeded")
+    statuses["service.samba.1.status_report"] = "fold_failed"
+    plan = SYNC.replacement_plan(statuses)
+    assert plan["sessions"] is False
+    assert plan["server_state"] is True
+    assert plan["shares"] is True
+    assert SYNC.classify_sync_status(statuses, has_fold_error=True) == "partial"
+
+
 def test_truncated_config_read_is_downgraded_to_fold_failed_and_blocks_replacement():
     statuses = dict.fromkeys(SYNC.SAMBA_COLLECT_PROCEDURES, "succeeded")
     statuses["service.samba.1.config_read"] = "fold_failed"
@@ -295,13 +344,31 @@ def test_stale_run_with_terminal_job_is_always_stale():
         )
 
 
-def test_stale_run_with_pending_or_scheduled_job_is_never_stale_regardless_of_age():
+def test_stale_run_with_pending_or_scheduled_job_is_not_stale_within_backstop():
     now = datetime(2026, 1, 1, tzinfo=UTC)
     for status in ("pending", "scheduled"):
         assert not SYNC.is_sync_run_stale(
             job_status=status,
             job_started=None,
-            run_started=now - timedelta(hours=6),
+            run_started=now - timedelta(minutes=30),
+            now=now,
+            job_timeout_seconds=360,
+        )
+
+
+def test_stale_run_with_pending_or_scheduled_job_is_stale_past_backstop():
+    # A pending/scheduled job that never reaches a terminal or running
+    # status -- because it was permanently lost (Redis eviction, a purged
+    # queue, or a worker that fetched it and died before calling
+    # Job.start()) -- must not wedge the domain in "running" forever; it is
+    # eventually reconciled once the row's age crosses the generous
+    # pending-job backstop.
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    for status in ("pending", "scheduled"):
+        assert SYNC.is_sync_run_stale(
+            job_status=status,
+            job_started=None,
+            run_started=now - timedelta(hours=2),
             now=now,
             job_timeout_seconds=360,
         )

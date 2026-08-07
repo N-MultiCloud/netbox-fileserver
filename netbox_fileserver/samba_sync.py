@@ -41,11 +41,23 @@ RPC_TERMINAL_STATUSES = frozenset(
 # Mirrors core.choices.JobStatusChoices; duplicated as plain strings here so
 # this module (and its DB-free unit tests) do not have to import NetBox core.
 JOB_STATUS_RUNNING = "running"
+JOB_STATUS_PENDING = "pending"
+JOB_STATUS_SCHEDULED = "scheduled"
+JOB_QUEUED_STATUSES = frozenset({JOB_STATUS_PENDING, JOB_STATUS_SCHEDULED})
 JOB_TERMINAL_STATUSES = frozenset({"completed", "errored", "failed"})
 # Grace period for the narrow window between a SambaSyncRun row being created
 # and its core.Job being enqueued and linked back onto the row -- a run with
 # no linked job yet is only stale if it has sat unassigned longer than this.
 SAMBA_SYNC_UNASSIGNED_JOB_GRACE_SECONDS = 30
+# A pending/scheduled job is normally never stale -- it just hasn't reached a
+# free worker yet. But if the job was permanently lost (Redis eviction, a
+# queue purge, or a worker that fetched it and died before calling
+# Job.start()), the run would otherwise wedge in "running" with no recovery
+# path for up to NetBox's job-retention window, 409ing every retry
+# indefinitely. This is a generous outer backstop, not a queue-depth
+# estimate: legitimate queuing behind other domains' syncs should clear long
+# before it, so crossing it is treated as abandonment.
+SAMBA_SYNC_PENDING_JOB_MAX_AGE_SECONDS = 3600
 SAMBA_COLLECT_PROCEDURES = (
     SAMBA_1_VERSION,
     SAMBA_1_SERVICE_STATUS,
@@ -151,6 +163,21 @@ def _make_model(
 
 def _is_truncated_rpc_string(value: object) -> bool:
     return str(value or "").endswith(_RPC_RESULT_TRUNCATION_MARKER)
+
+
+def _is_truncated_rpc_list(value: object) -> bool:
+    # netbox-rpc's event_store.redact_event_value() caps an over-long list at
+    # MAX_EVENT_LIST_ITEMS and appends {"_truncated": True, "remaining": N}
+    # as its last element -- a structurally distinct sentinel from the
+    # string-suffix marker above, used for status_report's sessions/tcons.
+    # Without this check a capped list looks like a complete-but-small one,
+    # so _session_models() would silently drop the sentinel (it has no PID)
+    # and _replace_sessions() would overwrite last-known-good sessions with
+    # a falsely "complete" partial set.
+    if not isinstance(value, list) or not value:
+        return False
+    last = value[-1]
+    return isinstance(last, Mapping) and last.get("_truncated") is True
 
 
 def _fallback_sensitive_name(value: object) -> bool:
@@ -682,6 +709,17 @@ def fold_result(
         ]
 
     if procedure_name == SAMBA_1_STATUS_REPORT:
+        # Same rationale as config_read/config_test: a truncated sessions or
+        # tcons list is missing an unknown tail of live connections, so the
+        # whole report is unreliable and must not overwrite last-known-good
+        # sessions with a falsely "complete" partial set.
+        if _is_truncated_rpc_list(result.get("sessions")) or _is_truncated_rpc_list(
+            result.get("tcons")
+        ):
+            raise SambaResultTruncated(
+                f"{procedure_name}: sessions or tcons was truncated by the "
+                "RPC result-size guard"
+            )
         return _session_models(result, model_classes)
 
     if procedure_name == SAMBA_1_USER_LIST:
@@ -865,6 +903,7 @@ def is_sync_run_stale(
     now: datetime,
     job_timeout_seconds: float,
     unassigned_grace_seconds: float = SAMBA_SYNC_UNASSIGNED_JOB_GRACE_SECONDS,
+    pending_job_max_age_seconds: float = SAMBA_SYNC_PENDING_JOB_MAX_AGE_SECONDS,
 ) -> bool:
     """Decide whether a ``running`` SambaSyncRun is abandoned and reconcilable.
 
@@ -881,8 +920,12 @@ def is_sync_run_stale(
       correctly closing the run -- always reconcilable.
     * A running job is only stale once its own execution time exceeds the
       job's timeout -- queue wait time never counts against it.
-    * A still-queued job (pending/scheduled) is never stale, regardless of how
-      long the row has existed -- it has not started running yet.
+    * A still-queued job (pending/scheduled) is not stale on normal queue
+      wait -- but a job that was permanently lost before ever starting (Redis
+      eviction, a purged queue, a worker that fetched it and died before
+      calling ``Job.start()``) never reaches a terminal or running status
+      either, so it is reconciled once the row's age crosses the generous
+      ``pending_job_max_age_seconds`` backstop.
     """
 
     if job_status is None:
@@ -891,6 +934,8 @@ def is_sync_run_stale(
         return True
     if job_status == JOB_STATUS_RUNNING and job_started is not None:
         return now - job_started > timedelta(seconds=job_timeout_seconds)
+    if job_status in JOB_QUEUED_STATUSES:
+        return now - run_started > timedelta(seconds=pending_job_max_age_seconds)
     return False
 
 
