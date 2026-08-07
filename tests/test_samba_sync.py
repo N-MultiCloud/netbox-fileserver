@@ -188,6 +188,62 @@ def test_redaction_scrubs_validator_rejections_and_private_key_blocks():
     assert SYNC.redact_secret_material(putty) == SYNC._UNSAFE_CONTENT_REDACTION
 
 
+def test_redaction_handles_backslash_continued_sensitive_assignment():
+    content = (
+        "[global]\n"
+        "  smb passwd file = \\\n"
+        "  s3cr3t-continuation-value\n"
+        "  workgroup = EXAMPLE\n"
+    )
+    redacted = SYNC.redact_secret_material(content)
+    assert "s3cr3t-continuation-value" not in redacted
+    assert "smb passwd file = [REDACTED]" in redacted
+    assert "workgroup = EXAMPLE" in redacted
+
+
+def test_redaction_preserves_non_sensitive_continued_assignment():
+    content = (
+        "[global]\n"
+        "  include = /etc/samba/dc1.conf \\\n"
+        "  /etc/samba/dc2.conf\n"
+        "  workgroup = EXAMPLE\n"
+    )
+    redacted = SYNC.redact_secret_material(content)
+    assert "/etc/samba/dc1.conf" in redacted
+    assert "/etc/samba/dc2.conf" in redacted
+    assert "workgroup = EXAMPLE" in redacted
+
+
+def test_config_read_truncated_content_skips_share_parsing():
+    result = {
+        "path": "/etc/samba/smb.conf",
+        "sha256": "deadbeef",
+        "content": (
+            "[global]\n  workgroup = EXAMPLE\n[Finance]\n  path = /srv"
+            "...[truncated]"
+        ),
+    }
+    instances = SYNC.fold_result(
+        "service.samba.1.config_read", result, model_classes=MODEL_CLASSES
+    )
+    classes = {type(instance).__name__ for instance in instances}
+    assert "SambaObservedShare" not in classes
+    assert "SambaConfigFile" in classes
+
+
+def test_config_test_truncated_stdout_skips_share_parsing():
+    result = {
+        "valid": True,
+        "stdout": "[Finance]\n  path = /srv/finance...[truncated]",
+    }
+    instances = SYNC.fold_result(
+        "service.samba.1.config_test", result, model_classes=MODEL_CLASSES
+    )
+    classes = {type(instance).__name__ for instance in instances}
+    assert "SambaObservedShare" not in classes
+    assert "SambaServerState" in classes
+
+
 def _desired(**overrides):
     values = {
         "name": "Finance",

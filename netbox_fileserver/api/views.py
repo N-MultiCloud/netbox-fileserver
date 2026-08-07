@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.utils import timezone
 from netbox.api.viewsets import NetBoxModelViewSet
 from rest_framework import status as http_status
 from rest_framework.decorators import action
@@ -220,15 +223,35 @@ class SambaDomainViewSet(NetBoxModelViewSet):
             if not request.user.has_perm(permission):
                 raise PermissionDenied(f"{permission} permission is required.")
 
+        from ..jobs import SAMBA_SYNC_JOB_TIMEOUT
+        from ..samba_sync import _finish_sync_run
+
         with transaction.atomic():
             locked_domain = SambaDomain.objects.select_for_update().get(pk=domain.pk)
-            if SambaSyncRun.objects.filter(
+            running = SambaSyncRun.objects.select_for_update().filter(
                 domain=locked_domain,
                 status="running",
-            ).exists():
-                return Response(
-                    {"detail": "A Samba sync is already running for this domain."},
-                    status=http_status.HTTP_409_CONFLICT,
+            ).first()
+            if running is not None:
+                # A running row whose job could not have still been within its
+                # own RQ timeout is abandoned (crashed worker, dead process
+                # between row-commit and enqueue, etc.) rather than in
+                # progress. Reconcile it to a terminal state instead of
+                # 409ing forever with no operator recovery path.
+                stale_before = timezone.now() - timedelta(seconds=SAMBA_SYNC_JOB_TIMEOUT)
+                if running.started > stale_before:
+                    return Response(
+                        {"detail": "A Samba sync is already running for this domain."},
+                        status=http_status.HTTP_409_CONFLICT,
+                    )
+                _finish_sync_run(
+                    running,
+                    status="failed",
+                    errors=[
+                        "Sync run exceeded its maximum runtime without reaching a "
+                        "terminal status; reconciled as failed so a new sync "
+                        "could start."
+                    ],
                 )
             sync_run = SambaSyncRun(domain=locked_domain)
             sync_run.full_clean()
@@ -245,8 +268,6 @@ class SambaDomainViewSet(NetBoxModelViewSet):
                 name=f"Samba Sync: {domain}",
             )
         except Exception:
-            from ..samba_sync import _finish_sync_run
-
             _finish_sync_run(
                 sync_run,
                 status="failed",

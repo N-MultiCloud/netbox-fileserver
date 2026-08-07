@@ -31,7 +31,14 @@ The await stage polls those rows to a terminal status for at most 300 seconds.
 The enclosing job timeout is 360 seconds. Because the sync job waits while the
 child RPC jobs use the same default queue, the NetBox RQ deployment must run at
 least two worker processes for live sync; a single worker will reach the
-bounded timeout instead of deadlocking indefinitely.
+bounded timeout instead of deadlocking indefinitely. Two workers only bounds
+the *single in-flight sync* case: `SambaSyncJob` occupies a worker slot for
+its whole poll loop, so W concurrent domain syncs need at least W+1 workers to
+guarantee a free slot for their child RPC executions. Under-provisioned
+concurrency does not deadlock (everything still resolves via the 300-second
+poll timeout) but degrades to serialized, timeout-bounded syncs instead of
+running in parallel. See N-MultiCloud/netbox-fileserver#28 for a
+queue-topology fix (e.g. a dedicated sync-await queue).
 
 ### Fold and replacement ownership
 

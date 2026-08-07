@@ -67,6 +67,12 @@ DRIFT_UNMANAGED = "unmanaged"
 _FOLD_FIELD_MARKER = "_samba_fold_fields"
 _REDACTED = "[REDACTED]"
 _UNSAFE_CONTENT_REDACTION = "[REDACTED: unsafe Samba configuration content]"
+# netbox-rpc's event_store.redact_event_value() appends this exact marker to
+# any oversized string field before persisting an RPCExecution result. A
+# config_read/config_test body ending in it was cut mid-section, so any
+# share parsed from it is unreliable and must not overwrite last-known-good
+# share state (see _persist_shares()'s prior-row-preservation fallback).
+_RPC_RESULT_TRUNCATION_MARKER = "...[truncated]"
 _PRIVATE_KEY_BEGIN_RE = re.compile(
     r"-{4,5}\s*BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?\s*-{4,5}", re.IGNORECASE
 )
@@ -125,6 +131,10 @@ def _make_model(
     return instance
 
 
+def _is_truncated_rpc_string(value: object) -> bool:
+    return str(value or "").endswith(_RPC_RESULT_TRUNCATION_MARKER)
+
+
 def _fallback_sensitive_name(value: object) -> bool:
     normalized = re.sub(r"[^a-z0-9]+", " ", str(value).casefold()).strip()
     compact = normalized.replace(" ", "")
@@ -140,6 +150,18 @@ def _assignment_parts(line: str) -> tuple[str, str] | None:
         return None
     position, separator = min(candidates)
     return line[:position], separator
+
+
+def _continues_next_line(line: str) -> bool:
+    """Return True for a smb.conf-style line-continuation backslash.
+
+    ``key = value\\`` continues the assignment onto the next physical line;
+    an even number of trailing backslashes means the last one is escaped and
+    does not continue.
+    """
+
+    trailing = len(line) - len(line.rstrip("\\"))
+    return trailing % 2 == 1
 
 
 def redact_secret_material(
@@ -164,28 +186,42 @@ def redact_secret_material(
     redacted_lines: list[str] = []
     in_private_key = False
 
-    for line in text.splitlines():
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
         if _PRIVATE_KEY_BEGIN_RE.search(line):
             in_private_key = True
             redacted_lines.append(_REDACTED)
             if _PRIVATE_KEY_END_RE.search(line):
                 in_private_key = False
+            index += 1
             continue
         if in_private_key:
             if _PRIVATE_KEY_END_RE.search(line):
                 in_private_key = False
+            index += 1
             continue
 
-        assignment = _assignment_parts(line)
+        # A sensitive assignment can span multiple physical lines via a
+        # trailing backslash continuation. Group the whole logical line so
+        # every physical line of it is redacted together, not just the first.
+        group = [line]
+        while _continues_next_line(group[-1]) and index + len(group) < len(lines):
+            group.append(lines[index + len(group)])
+        index += len(group)
+
+        logical_line = "\n".join(group)
+        assignment = _assignment_parts(group[0])
         unsafe = bool(assignment and name_is_sensitive(assignment[0]))
         if not unsafe and validator is not None:
             try:
-                validator(line, field_name="content")
+                validator(logical_line, field_name="content")
             except Exception:
                 unsafe = True
 
         if unsafe:
-            indentation = line[: len(line) - len(line.lstrip())]
+            indentation = group[0][: len(group[0]) - len(group[0].lstrip())]
             if assignment is None:
                 redacted_lines.append(f"{indentation}{_REDACTED}")
             else:
@@ -194,7 +230,7 @@ def redact_secret_material(
                     f"{indentation}{key.strip()} {separator} {_REDACTED}"
                 )
         else:
-            redacted_lines.append(line)
+            redacted_lines.extend(group)
 
     redacted = "\n".join(redacted_lines)
     if trailing_newline and redacted:
@@ -554,19 +590,26 @@ def fold_result(
                 config_sha256=digest,
             ),
         ]
-        instances.extend(
-            _share_models_from_config(
-                content,
-                model_classes=model_classes,
-                validator=validator,
-                sensitive_name=sensitive_name,
+        # A truncated body was cut mid-section by netbox-rpc's result-size
+        # limit before it ever reaches us; parsing it would yield share rows
+        # with incomplete raw_params. Skip share extraction so _persist_shares
+        # falls back to preserving the prior observed share rows instead of
+        # overwriting them with a partial parse.
+        if not _is_truncated_rpc_string(raw_content):
+            instances.extend(
+                _share_models_from_config(
+                    content,
+                    model_classes=model_classes,
+                    validator=validator,
+                    sensitive_name=sensitive_name,
+                )
             )
-        )
         return instances
 
     if procedure_name == SAMBA_1_CONFIG_TEST:
+        raw_stdout = result.get("stdout")
         stdout = redact_secret_material(
-            result.get("stdout"),
+            raw_stdout,
             validator=validator,
             sensitive_name=sensitive_name,
         )
@@ -577,14 +620,15 @@ def fold_result(
                 testparm_ok=bool(result.get("valid")),
             )
         ]
-        instances.extend(
-            _share_models_from_config(
-                stdout,
-                model_classes=model_classes,
-                validator=validator,
-                sensitive_name=sensitive_name,
+        if not _is_truncated_rpc_string(raw_stdout):
+            instances.extend(
+                _share_models_from_config(
+                    stdout,
+                    model_classes=model_classes,
+                    validator=validator,
+                    sensitive_name=sensitive_name,
+                )
             )
-        )
         return instances
 
     if procedure_name == SAMBA_1_LIST_SHARES:
