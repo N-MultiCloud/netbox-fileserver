@@ -100,3 +100,15 @@ ruff check netbox_fileserver/ tests/
 python -m compileall netbox_fileserver/
 pytest tests/ -v
 ```
+
+## Public quality workflow
+
+GitHub Actions runs the complete existing Ruff, compilation and import-free
+pytest suite on isolated Ubuntu 24.04 with Python 3.12. Main and develop pushes,
+pull requests and explicit manual quality requests use the same commands.
+The workflow does not install the private plugin dependencies, provision NetBox
+or a database, call production, publish packages or use deployment credentials.
+Keep all original test modules and assertions when changing CI. The native
+Gitea workflows remain separate; never move their production commands or trusted
+runner into the public quality job. Only superseded pull-request quality may
+be cancelled; main, develop and manual qualifications remain independent.
